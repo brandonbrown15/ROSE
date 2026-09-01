@@ -1,80 +1,83 @@
 # Installation
 
-This is an end-to-end setup: deploy the Worker first, then add the Home
-Assistant integration.
-
 ## 0. Prerequisites
 
 - A Cloudflare account (Workers, D1, and Vectorize are all available on the
   free plan at low volumes).
-- An OpenAI API key.
-- A Home Assistant instance you can install custom integrations on.
-- Node.js 18+ and the [`wrangler`](https://developers.cloudflare.com/workers/wrangler/)
-  CLI (installed automatically by `scripts/setup.sh` as a dev dependency).
+- An OpenAI API key ([platform.openai.com/api-keys](https://platform.openai.com/api-keys)) — the one secret
+  nothing in this repo can generate for you.
+- A Home Assistant instance you can install custom integrations on
+  (HACS, if you want one-click installs — see step 3).
+- Node.js 18+. `wrangler` itself is installed automatically as a dev
+  dependency.
 
-## 1. Clone and configure
+## 1. Clone and run the setup script
 
 ```bash
 git clone https://github.com/brandonbrown15/rose.git
 cd rose
-cp .env.example .env
-# edit .env and fill in OPENAI_API_KEY / ROSE_API_KEY (generate one:
-# openssl rand -hex 32)
 ./scripts/setup.sh
 ```
 
-`setup.sh` installs the Worker's npm dependencies and walks you through
-creating the D1 database and Vectorize index (see
-[`cloudflare.md`](cloudflare.md) if you'd rather do it by hand).
+This single script takes you from a fresh clone to a deployed Worker:
 
-## 2. Deploy the Worker
+1. Installs the Worker's npm dependencies.
+2. Runs `wrangler login` if you aren't already authenticated with Cloudflare.
+3. Creates the D1 database (`rose-db`) and patches `cloudflare/wrangler.jsonc`
+   with its id automatically — no manual copy-pasting.
+4. Creates the Vectorize index (`rose-memory`).
+5. Applies the D1 schema migration.
+6. Prompts for your **OpenAI API key** (once, hidden input) and saves it to
+   `.env`.
+7. **Generates a `ROSE_API_KEY` for you** — this is the shared secret between
+   the Worker and Home Assistant; you don't need to invent, remember, or run
+   anything yourself to get one.
+8. Pushes both as Worker secrets (`wrangler secret put`) and runs
+   `wrangler deploy`.
 
-```bash
-./scripts/deploy.sh
-```
+At the end it prints your Worker's URL and the generated `ROSE_API_KEY` —
+save those, you'll need them in step 3. Re-running `./scripts/setup.sh`
+later is safe; it skips anything already set up and just redeploys.
 
-This pushes your secrets to Cloudflare (`wrangler secret put`) and deploys
-the Worker (`wrangler deploy`). Note the `*.workers.dev` URL it prints, or
-your custom domain if you've mapped one — you'll need it in step 3.
+If you'd rather do any of this by hand (e.g. you already have a D1 database
+you want to reuse), see [`cloudflare.md`](cloudflare.md) for the manual
+steps `setup.sh` automates. For a later code change, use
+`./scripts/deploy.sh` instead of rerunning full setup, or just push to
+`main` and let the `deploy` GitHub Actions workflow handle it — see
+[`cloudflare.md`](cloudflare.md#github-actions-deploys).
 
-Alternatively, push to `main` and let the `deploy` GitHub Actions workflow
-do it — see [`cloudflare.md`](cloudflare.md#github-actions-deploys).
+## 2. Install the Home Assistant integration
 
-## 3. Install the Home Assistant integration
+Click, then **Download**, then restart Home Assistant:
 
-**Manually:**
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=brandonbrown15&repository=ROSE&category=integration)
 
-```bash
-cp -r home-assistant/custom_components/rose \
-  <config>/custom_components/rose
-```
+(Doesn't work, or don't use HACS? See the manual-install fallback in
+[`home-assistant.md`](home-assistant.md#installing).)
 
-then restart Home Assistant.
+## 3. Add the integration
 
-**Via HACS:** add this repository as a custom repository (category:
-Integration) and install **ROSE — Persistent AI Assistant**. See
-[`home-assistant.md`](home-assistant.md).
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rose)
 
-## 4. Add the integration
+Enter the two values `setup.sh` printed:
 
-**Settings → Devices & services → Add Integration → ROSE**, then enter:
+- **ROSE URL**: your Worker's `*.workers.dev` URL
+- **API Key**: the generated `ROSE_API_KEY`
 
-- **ROSE URL**: your Worker's URL from step 2
-- **API Key**: the `ROSE_API_KEY` value from your `.env`
-
-Home Assistant will call the Worker's `/health` endpoint to verify the
+Home Assistant calls the Worker's `/health` endpoint to verify the
 connection before saving. On success, `conversation.rose` becomes available
 as a conversation agent.
 
-## 5. Try it
+## 4. Try it
 
 **Developer Tools → Actions**, call `conversation.process`:
 
 ```yaml
 agent_id: conversation.rose
-text: "Remember that the office thermostat should stay at 68 in winter."
+text: "The office thermostat should stay at 68 in winter."
 ```
 
-Then in a new conversation, ask "what temperature should the office
-thermostat be in winter?" — see [`memory.md`](memory.md) for how recall
-works.
+Then in a *new* conversation, ask "what temperature should the office
+thermostat be in winter?" ROSE decided on its own that the first message was
+worth remembering — you never had to say "remember this." See
+[`memory.md`](memory.md) for how that decision and recall work.

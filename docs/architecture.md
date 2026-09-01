@@ -11,9 +11,13 @@ A Cloudflare Worker that is the actual "brain":
   `ROSE_API_KEY` and routes them (`/chat`, `/health`).
 - **`src/chat.ts`** — composes a reply: pulls recent conversation history and
   semantically recalled memories, sends them to OpenAI's chat completions
-  API, and (optionally) queues the exchange for long-term storage.
+  API, then hands the exchange to `distill.ts` for a long-term-memory
+  decision in the background.
+- **`src/distill.ts`** — asks the model whether an exchange contains a fact
+  worth remembering and, if so, produces a short summary of it. This is what
+  makes memory automatic rather than something a caller has to flag.
 - **`src/memory.ts`** — reads/writes conversation and message rows in D1, and
-  writes distilled long-term memories (text in D1, embedding in Vectorize).
+  writes long-term memories (distilled text in D1, embedding in Vectorize).
 - **`src/recall.ts`** — embeds a query and searches Vectorize for the closest
   stored memories, resolving the matching text back out of D1.
 - **`src/ha.ts`** — an optional callback path so ROSE can read Home Assistant

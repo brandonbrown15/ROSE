@@ -51,10 +51,18 @@ class RoseApiClient:
             raise RoseApiError(f"Could not reach ROSE at {self._url}: {err}") from err
 
     async def async_chat(
-        self, text: str, conversation_id: str | None = None, remember: bool = False
+        self, text: str, conversation_id: str | None = None, remember: bool | None = None
     ) -> RoseChatResponse:
-        """Send a message to ROSE and return its reply."""
-        payload = {"text": text, "remember": remember}
+        """Send a message to ROSE and return its reply.
+
+        `remember` defaults to None, which leaves the memory decision to
+        ROSE itself: it decides per-exchange whether there's a durable fact
+        worth storing. Pass True/False only to override that for a specific
+        call (e.g. an explicit "remember this" or "forget I said that").
+        """
+        payload: dict[str, object] = {"text": text}
+        if remember is not None:
+            payload["remember"] = remember
         if conversation_id:
             payload["conversation_id"] = conversation_id
 

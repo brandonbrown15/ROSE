@@ -1,7 +1,6 @@
 # Home Assistant Integration
 
-Source lives in
-[`home-assistant/custom_components/rose`](../home-assistant/custom_components/rose).
+Source lives in [`custom_components/rose`](../custom_components/rose).
 
 ## What it adds
 
@@ -13,35 +12,43 @@ Source lives in
 
 ## Installing
 
-### Via HACS (recommended once published)
+### Via HACS (recommended — one click)
 
-1. HACS → Integrations → ⋮ → Custom repositories → add
-   `https://github.com/brandonbrown15/rose`, category **Integration**.
-2. Search for **ROSE — Persistent AI Assistant** and install it.
-3. Restart Home Assistant.
+Click this to open the "add custom repository" dialog directly on your own
+Home Assistant instance, pre-filled — no copy-pasting the GitHub URL by
+hand:
 
-`hacs.json` at the repository root declares the integration for HACS.
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=brandonbrown15&repository=ROSE&category=integration)
 
-> **Known limitation:** HACS conventionally expects `custom_components/` at
-> the repository root, but this repo nests it under `home-assistant/` to keep
-> the Worker and the integration cleanly separated. Until that's resolved
-> (likely a small repo restructure, or a HACS release action that publishes
-> `home-assistant/custom_components/` as its own artifact), install manually
-> as described below, or symlink `custom_components/rose` at the repo root
-> to `home-assistant/custom_components/rose` in your own fork.
+Then: **Download** → restart Home Assistant → click the "add integration"
+badge in [Configuring](#configuring) below.
+
+(If that link doesn't work for you — e.g. HACS isn't installed yet, or
+`my.home-assistant.io` can't reach your instance — do it manually instead:
+HACS → Integrations → ⋮ → Custom repositories → add
+`https://github.com/brandonbrown15/rose`, category **Integration** → search
+for **ROSE — Persistent AI Assistant** → install → restart.)
+
+`hacs.json` at the repository root declares the integration, and
+`custom_components/rose` sits at the repo root — HACS's standard layout for
+an integration — so this works out of the box, no manual file copying.
 
 ### Manually
 
-Copy `home-assistant/custom_components/rose` into your Home Assistant
-config's `custom_components/` directory, then restart:
+If you'd rather not use HACS, copy `custom_components/rose` into your Home
+Assistant config's `custom_components/` directory, then restart:
 
 ```bash
-cp -r home-assistant/custom_components/rose <config>/custom_components/rose
+cp -r custom_components/rose <config>/custom_components/rose
 ```
 
 ## Configuring
 
-**Settings → Devices & services → Add Integration → ROSE**:
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rose)
+
+(Equivalent manual path: **Settings → Devices & services → Add Integration →
+ROSE**.) Enter the two values `scripts/setup.sh` printed at the end of Worker
+setup:
 
 | Field | Value |
 |---|---|
@@ -63,6 +70,10 @@ data:
   agent_id: conversation.rose
   text: "turn the memory of today's plans into a note for tomorrow"
 ```
+
+ROSE decides on its own whether anything in an exchange is worth
+remembering long-term — see [`memory.md`](memory.md). You don't need to
+tell it to remember something; just say it.
 
 See [`../home-assistant/examples/talk_to_rose_automation.yaml`](../home-assistant/examples/talk_to_rose_automation.yaml)
 for a full automation, and [`../home-assistant/blueprints/`](../home-assistant/blueprints/)
