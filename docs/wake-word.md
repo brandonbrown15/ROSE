@@ -20,6 +20,37 @@ whatever wake word your satellite already has (e.g. "Hey Jarvis" or
 `conversation.rose` works. Getting the wake word itself to be "Rose" is a
 one-time, additional step on top, not a prerequisite.
 
+## Choosing satellite hardware — and why Sonos/B&O can't be it
+
+Neither Sonos nor B&O can be the **listening** device. Both are closed
+ecosystems — neither exposes its microphone array or on-device audio
+pipeline to third-party software, so there's no way to run a custom
+wake-word engine on one. Sonos Voice Control and B&O's Alexa/Google-built-in
+options are locked to their own (or licensed) voice stacks; you can't swap
+in "Rose" as the wake word on that hardware.
+
+They're still genuinely useful for the *other* half, though — Assist
+treats "what's listening" and "what talks back" as separate things you can
+mix freely:
+
+- **Sonos** — HA's official core integration already lets ROSE's reply
+  play through it (`media_player`/TTS announce, multi-room grouping) today,
+  no wake word involved.
+- **B&O** — a community integration covers the newer "Mozart platform"
+  speakers (Beosound Balance, Beolab 8, etc.) for the same kind of
+  playback control.
+
+So: keep Sonos/B&O as ROSE's *voice* (they already sound better than any
+purpose-built satellite's tiny speaker), and add a small, cheap microphone
+device per room for the *listening* half — Home Assistant's own
+[Voice Preview Edition](https://www.home-assistant.io/voice-pe/) is the
+obvious pick (official, ESP32-S3, built for exactly this, works with a
+custom-trained wake word out of the box), or a DIY ESPHome satellite
+(M5Stack Atom Echo, etc.) if you'd rather build it yourself. Point that
+satellite's Assist pipeline output at your Sonos/B&O `media_player` entity
+instead of its own speaker — say "Rose" to the small mic puck, the reply
+comes out of your actual speakers.
+
 ## Getting a custom "Rose" wake word
 
 "Rose" isn't one of the handful of wake words Home Assistant ships by
