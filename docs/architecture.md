@@ -24,18 +24,23 @@ A Cloudflare Worker that is the actual "brain":
   entity state or call services while composing a reply — also what the
   energy optimizer below uses to read room temperature and control the heat
   pump.
-- **`src/energy.ts`**, **`src/octopus.ts`**, **`src/metoffice.ts`** —
-  optional, off by default: a deterministic (not LLM-driven) heat pump
-  scheduler that ranks Octopus Agile price slots by efficiency-adjusted cost
-  using a Met Office forecast, and applies the current slot's target
-  temperature to a Home Assistant `climate` entity via `ha.ts`. Runs on a
-  Cloudflare Cron Trigger (`wrangler.jsonc` → `triggers.crons`), not on the
-  request path. See [`energy.md`](energy.md).
+- **`src/energy.ts`**, **`src/octopus.ts`**, **`src/metoffice.ts`**,
+  **`src/solaredge.ts`** — optional, off by default, and each piece
+  (heat pump / solar / EV) independently gated on its own config: a
+  deterministic (not LLM-driven) optimizer that ranks Octopus Agile price
+  slots by efficiency-adjusted cost using a Met Office forecast, layers in
+  a live SolarEdge surplus reading (free heat beats cheap heat), and drives
+  the heat pump and (solar-surplus-first) EV charging via Home Assistant
+  services through `ha.ts`. EV control deliberately goes through HA rather
+  than a direct SolarEdge call — SolarEdge doesn't publish an official API
+  for it. Runs on a Cloudflare Cron Trigger (`wrangler.jsonc` →
+  `triggers.crons`), not on the request path. See [`energy.md`](energy.md).
 
 Storage:
 
-- **D1** (`migrations/0001_initial.sql`, `0002_energy.sql`) —
-  `conversations`, `messages`, `memories`, `energy_plans`.
+- **D1** (`migrations/0001_initial.sql`, `0002_energy.sql`,
+  `0003_energy_events.sql`) — `conversations`, `messages`, `memories`,
+  `energy_plans`, `energy_events`.
 - **Vectorize** — one vector per memory, keyed by `memories.id`.
 
 ```
@@ -48,11 +53,12 @@ Home Assistant  ──HTTP (Bearer ROSE_API_KEY)──▶  Cloudflare Worker
                                                  OpenAI
 
 Cloudflare Cron (every 30 min, optional)  ──▶  energy.ts
-                                                  │    │
-                                          Octopus │    │ Met Office
-                                                  ▼    ▼
-                                          heat pump plan ──▶ Home Assistant
-                                          (climate.set_temperature)
+                                                  │    │    │
+                                          Octopus │    │Met │ SolarEdge
+                                                  ▼    ▼Office▼
+                                          heat pump + EV plan ──▶ Home Assistant
+                                          (climate.set_temperature,
+                                           charger start/stop service)
 ```
 
 ## 2. ROSE Home Assistant (`custom_components/rose/`)

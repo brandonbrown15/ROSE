@@ -28,6 +28,23 @@ export interface Env {
   ROSE_ROOM_TEMP_ENTITY_ID?: string; // e.g. sensor.living_room_temperature
   ROSE_HEATING_MIN_TEMP?: string; // °C, hard floor — never overridden for cost
   ROSE_HEATING_MAX_TEMP?: string; // °C, hard ceiling — never overridden for cost
+
+  // Solar (SolarEdge) — independently optional; works with or without the
+  // heat pump fields above. A live surplus reading overrides the heat pump
+  // target to max (free heat) and, if configured, starts EV charging.
+  SOLAREDGE_API_KEY?: string;
+  SOLAREDGE_SITE_ID?: string;
+
+  // EV charging — independently optional; requires solar to be configured
+  // too (it decides purely off live solar surplus, no price fallback yet).
+  // Controlled via Home Assistant, not a direct SolarEdge call — see
+  // docs/energy.md for why. *_SERVICE values are "domain.service" strings,
+  // e.g. "switch.turn_on" — whatever your HA integration for the charger
+  // exposes.
+  ROSE_EV_CHARGER_ENTITY_ID?: string;
+  ROSE_EV_CHARGER_START_SERVICE?: string;
+  ROSE_EV_CHARGER_STOP_SERVICE?: string;
+  ROSE_EV_CHARGER_SURPLUS_THRESHOLD_KW?: string; // default 1.4 if unset
 }
 
 function unauthorized(): Response {
