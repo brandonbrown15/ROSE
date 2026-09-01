@@ -59,13 +59,18 @@ the same `/chat` API the Home Assistant integration uses, so other projects
 (e.g. a separate assistant front-end) can talk to the same ROSE backend and
 share its memory.
 
-## 4. Wake word (`wake-word/`)
+## 4. Wake word (`custom_components/rose/wake_word_model/`, `wake-word/`)
 
-A trained `micro_wake_word` model (`rose.tflite` + `rose.json` manifest) so
-voice satellites can listen for "Rose" specifically, independent of and
-unrelated to how `conversation.rose` works — see [`wake-word.md`](wake-word.md).
-`train_rose.py` is the training script that produced it, kept for
-reproducibility.
+A trained `micro_wake_word` model (`rose.tflite` + `rose.json` manifest),
+bundled inside the integration itself so it's present on any HACS/manual
+install. `custom_components/rose/wake_word.py` (note: no trailing `/` —
+different file) is best-effort setup code run from `async_setup_entry`
+that installs and, when safe, selects it — independent of and unrelated to
+how `conversation.rose` works, since a satellite's wake-word engine and
+ROSE's conversation processing are separate HA subsystems. `wake-word/train_rose.py`
+is the training script that produced the model, kept there (not bundled
+into the integration) for reproducibility. See [`wake-word.md`](wake-word.md)
+for the full picture.
 
 ## Deployment
 
