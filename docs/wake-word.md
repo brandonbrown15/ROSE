@@ -1,9 +1,13 @@
 # Wake word ("Rose")
 
-A trained "Rose" wake word model ships in this repo — [`wake-word/rose.tflite`](../wake-word/rose.tflite)
-— ready to install on a Home Assistant Voice Preview Edition or any
-ESPHome/`micro_wake_word` satellite. No training needed on your end; skip
-to [Installing it](#installing-it).
+A trained "Rose" wake word model ships in this repo — [`custom_components/rose/wake_word_model/rose.tflite`](../custom_components/rose/wake_word_model/rose.tflite)
+— ready to use on a Home Assistant Voice Preview Edition or any
+ESPHome/`micro_wake_word` satellite. No training needed on your end.
+
+**If you installed ROSE as a Home Assistant OS/Supervised install**, the
+integration installs the model automatically on setup/restart — skip to
+[Automatic setup](#automatic-setup). Otherwise, see
+[Installing it manually](#installing-it-manually).
 
 ## Two different things
 
@@ -51,10 +55,46 @@ that satellite's Assist pipeline output at your Sonos/B&O `media_player`
 entity instead of its own speaker — say "Rose" to the small mic puck, the
 reply comes out of your actual speakers.
 
-## Installing it
+## Automatic setup
 
-1. Get the two files onto your Home Assistant instance: `wake-word/rose.tflite`
-   and `wake-word/rose.json` from this repo.
+On Home Assistant OS/Supervised installs, the ROSE integration does two
+things by itself, every time it starts up (`custom_components/rose/wake_word.py`):
+
+1. **Copies the model** into openWakeWord's shared custom-model folder
+   (`/share/openwakeword`), so it shows up in the wake-word dropdown
+   without you touching any files.
+2. **Selects it**, but only when it's unambiguous and safe: if exactly one
+   wake-word provider is set up (e.g. the openWakeWord add-on) and an
+   Assist pipeline is using ROSE as its conversation agent *with no wake
+   word already chosen*, that pipeline gets "Rose" set as its wake word
+   automatically. It deliberately never overwrites a wake word you already
+   picked, and never guesses between multiple satellites/providers — those
+   cases, and anything it couldn't determine, fall back to a Home
+   Assistant notification telling you exactly what happened and what (if
+   anything) to do manually.
+
+Check **Settings → Notifications** after installing/restarting to see the
+outcome. Say "Rose" to test it — if it doesn't trigger reliably, or
+triggers on things that aren't "Rose", see
+[Known limitations](#known-limitations--if-you-want-a-more-robust-model)
+below; `probability_cutoff` in `rose.json` (currently `0.85`) is the first
+thing to tune, either in the add-on's model settings or by editing
+`custom_components/rose/wake_word_model/rose.json` and restarting.
+
+This only runs on Supervised/HAOS installs — Core/Container installs don't
+have a `/share` folder for it to use, and it no-ops there instead (logs a
+line, no notification, nothing breaks). See
+[Installing it manually](#installing-it-manually) for that case.
+
+## Installing it manually
+
+For Core/Container installs (no `/share` folder), or if you'd rather not
+rely on the automatic step:
+
+1. Get the two files onto your Home Assistant instance:
+   `custom_components/rose/wake_word_model/rose.tflite` and `rose.json` from
+   this repo (already present locally if you installed ROSE via HACS or a
+   manual copy — no separate download needed).
 2. **If you run the openWakeWord/`micro_wake_word` add-on** (Voice Preview
    Edition and most Wyoming satellites go through it): copy both files into
    the add-on's custom-model folder (via the Samba or File Editor add-on —
@@ -129,6 +169,7 @@ the first real-world test.
 - **To build a stronger version**: run the full recipe yourself via the
   [community Colab notebook](https://github.com/alfiedennen/microwakeword-trainer)
   (real GPU, ~45 min, the official negative dataset) and it'll drop in as a
-  replacement for `wake-word/rose.tflite` — same manifest format. Or open
+  replacement for `custom_components/rose/wake_word_model/rose.tflite` — same
+  manifest format. Or open
   an issue/PR here if you'd like to contribute an improved model trained
   against the full dataset.

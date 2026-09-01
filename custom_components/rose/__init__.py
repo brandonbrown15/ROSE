@@ -11,6 +11,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import RoseApiClient, RoseApiError
 from .const import CONF_API_KEY, CONF_URL, DOMAIN
+from .wake_word import async_setup_wake_word
 
 PLATFORMS: list[Platform] = [Platform.CONVERSATION]
 
@@ -39,6 +40,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoseConfigEntry) -> bool
     entry.runtime_data = RoseData(client=client)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Best-effort, non-blocking: install the bundled "Rose" wake-word model
+    # and, if unambiguous, select it. Never affects entry setup succeeding.
+    hass.async_create_task(
+        async_setup_wake_word(hass, entry), "rose_wake_word_setup"
+    )
+
     return True
 
 
