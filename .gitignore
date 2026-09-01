@@ -1,0 +1,31 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node / Cloudflare Worker
+node_modules/
+cloudflare/node_modules/
+.wrangler/
+cloudflare/.wrangler/
+dist/
+cloudflare/dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# Python / Home Assistant
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

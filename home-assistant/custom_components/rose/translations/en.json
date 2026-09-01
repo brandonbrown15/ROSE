@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Connect Home Assistant to your ROSE Cloudflare Worker deployment.",
+        "data": {
+          "url": "ROSE URL",
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to ROSE. Check the URL and that the Worker is deployed.",
+      "invalid_auth": "ROSE rejected the API key."
+    },
+    "abort": {
+      "already_configured": "This ROSE URL is already configured."
+    }
+  }
+}

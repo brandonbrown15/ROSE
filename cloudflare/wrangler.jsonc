@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rose",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // D1 — stores conversations, messages, and memory metadata.
+  // Create with: wrangler d1 create rose-db
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rose-db",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Vectorize — semantic recall over past memories.
+  // Create with: wrangler vectorize create rose-memory --dimensions=1536 --metric=cosine
+  "vectorize": [
+    {
+      "binding": "MEMORY_INDEX",
+      "index_name": "rose-memory"
+    }
+  ],
+
+  // Non-secret configuration. Secrets (OPENAI_API_KEY, ROSE_API_KEY, HA_TOKEN)
+  // are set with `wrangler secret put <NAME>` and must never be listed here.
+  "vars": {
+    "OPENAI_CHAT_MODEL": "gpt-4o-mini",
+    "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small"
+  }
+}

@@ -1,0 +1,26 @@
+# Example automation: forward a voice assistant conversation to ROSE and
+# speak its reply back through a media player.
+#
+# Copy this into an automation (Settings → Automations & Scenes → Create
+# Automation → Edit in YAML), or adapt the `conversation.process` call for
+# your own trigger.
+
+alias: "Ask ROSE"
+description: "Send free-form text to the ROSE conversation agent and speak the reply."
+trigger:
+  - platform: conversation
+    command: "ask rose {question}"
+condition: []
+action:
+  - service: conversation.process
+    data:
+      agent_id: conversation.rose
+      text: "{{ trigger.slots.question }}"
+    response_variable: rose_response
+  - service: tts.speak
+    target:
+      entity_id: tts.your_tts_entity
+    data:
+      media_player_entity_id: media_player.your_speaker
+      message: "{{ rose_response.response.speech.plain.speech }}"
+mode: queued

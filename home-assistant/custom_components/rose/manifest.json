@@ -1,0 +1,12 @@
+{
+  "domain": "rose",
+  "name": "ROSE",
+  "codeowners": ["@brandonbrown15"],
+  "config_flow": true,
+  "documentation": "https://github.com/brandonbrown15/rose/blob/main/docs/home-assistant.md",
+  "issue_tracker": "https://github.com/brandonbrown15/rose/issues",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}
