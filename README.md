@@ -29,20 +29,33 @@ GitHub
 
 ## Quick start
 
+**1. Deploy the backend** — one script, needs only Node.js and a Cloudflare
+account:
+
 ```bash
 git clone https://github.com/brandonbrown15/rose.git
 cd rose
 ./scripts/setup.sh
 ```
 
-That's the whole backend setup. One script takes you from a fresh clone to a
-deployed Worker: it installs dependencies, logs you into Cloudflare, creates
-the D1 database and Vectorize index, generates a `ROSE_API_KEY` for you,
-asks for your OpenAI key (the one secret nobody but you can supply), and
-deploys. It prints your Worker URL and API key at the end — those two values
-are all you need to install the [Home Assistant integration](docs/home-assistant.md).
+It installs dependencies, logs you into Cloudflare, creates the D1 database
+and Vectorize index, generates a `ROSE_API_KEY` for you, asks once for your
+OpenAI key (the one secret nobody but you can supply), and deploys. It
+prints your Worker URL and API key at the end.
 
-See [`docs/installation.md`](docs/installation.md) for the full walkthrough.
+**2. Install the Home Assistant integration** — two clicks, on your own HA
+instance:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=brandonbrown15&repository=ROSE&category=integration)
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rose)
+
+First badge → **Download** → restart Home Assistant. Second badge → paste in
+the Worker URL and API key from step 1. Done — `conversation.rose` is live,
+and it decides on its own what's worth remembering.
+
+See [`docs/installation.md`](docs/installation.md) for the full walkthrough,
+or [`docs/home-assistant.md`](docs/home-assistant.md) if either badge
+doesn't work for your setup.
 
 ## Secrets
 
@@ -56,16 +69,6 @@ variables ROSE needs; the real values live in:
 - **GitHub Actions secrets**, if you wire up automatic deploys
 
 That's what makes it safe for this repository to be public.
-
-## Installing the Home Assistant integration via HACS
-
-`custom_components/rose` sits at the repo root, HACS's standard layout for
-an integration, so installation is one click: add this repository to HACS as
-a custom repository (category: Integration), install
-**ROSE — Persistent AI Assistant**, restart Home Assistant, then configure it
-from **Settings → Devices & services → Add Integration → ROSE**, supplying
-the Worker URL and API key `scripts/setup.sh` printed. See
-[`docs/home-assistant.md`](docs/home-assistant.md).
 
 ## Documentation
 

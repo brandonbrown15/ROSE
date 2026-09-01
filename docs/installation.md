@@ -29,9 +29,9 @@ This single script takes you from a fresh clone to a deployed Worker:
 5. Applies the D1 schema migration.
 6. Prompts for your **OpenAI API key** (once, hidden input) and saves it to
    `.env`.
-7. **Generates a `ROSE_API_KEY` for you** (`openssl rand -hex 32`) — this is
-   the shared secret between the Worker and Home Assistant; you don't need
-   to invent or remember one yourself.
+7. **Generates a `ROSE_API_KEY` for you** — this is the shared secret between
+   the Worker and Home Assistant; you don't need to invent, remember, or run
+   anything yourself to get one.
 8. Pushes both as Worker secrets (`wrangler secret put`) and runs
    `wrangler deploy`.
 
@@ -48,23 +48,18 @@ steps `setup.sh` automates. For a later code change, use
 
 ## 2. Install the Home Assistant integration
 
-**Via HACS (recommended):** add this repository as a custom repository
-(category: Integration) and install **ROSE — Persistent AI Assistant** —
-`custom_components/rose` sits at the repo root, so HACS finds it
-automatically. See [`home-assistant.md`](home-assistant.md).
+Click, then **Download**, then restart Home Assistant:
 
-**Manually:**
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=brandonbrown15&repository=ROSE&category=integration)
 
-```bash
-cp -r custom_components/rose <config>/custom_components/rose
-```
-
-then restart Home Assistant.
+(Doesn't work, or don't use HACS? See the manual-install fallback in
+[`home-assistant.md`](home-assistant.md#installing).)
 
 ## 3. Add the integration
 
-**Settings → Devices & services → Add Integration → ROSE**, then enter the
-two values `setup.sh` printed:
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rose)
+
+Enter the two values `setup.sh` printed:
 
 - **ROSE URL**: your Worker's `*.workers.dev` URL
 - **API Key**: the generated `ROSE_API_KEY`

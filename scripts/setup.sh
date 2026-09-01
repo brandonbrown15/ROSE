@@ -36,9 +36,11 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   sed -i.bak "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_API_KEY|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
 fi
 
-# --- ROSE_API_KEY: generate one so nobody has to run openssl by hand ------
+# --- ROSE_API_KEY: generate one so nobody has to run anything by hand -----
+# (uses node, not openssl — node is already a hard prerequisite, so this
+# keeps "just Node.js" the whole toolchain story)
 if [ -z "${ROSE_API_KEY:-}" ]; then
-  ROSE_API_KEY="$(openssl rand -hex 32)"
+  ROSE_API_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
   sed -i.bak "s|^ROSE_API_KEY=.*|ROSE_API_KEY=$ROSE_API_KEY|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
   echo "Generated ROSE_API_KEY and saved it to .env — you'll enter this in Home Assistant later."
 fi

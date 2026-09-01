@@ -43,7 +43,10 @@ npx wrangler secret put HA_TOKEN
 ```
 
 `ROSE_API_KEY` is the shared secret the Home Assistant integration sends as
-`Authorization: Bearer <key>`. Generate one with `openssl rand -hex 32`.
+`Authorization: Bearer <key>`. `scripts/setup.sh` generates one for you; to
+make your own instead (e.g. when rotating it), any 32+ byte random hex
+string works — `openssl rand -hex 32` or
+`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
 ## Local development
 

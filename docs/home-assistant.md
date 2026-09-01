@@ -14,10 +14,20 @@ Source lives in [`custom_components/rose`](../custom_components/rose).
 
 ### Via HACS (recommended — one click)
 
-1. HACS → Integrations → ⋮ → Custom repositories → add
-   `https://github.com/brandonbrown15/rose`, category **Integration**.
-2. Search for **ROSE — Persistent AI Assistant** and install it.
-3. Restart Home Assistant.
+Click this to open the "add custom repository" dialog directly on your own
+Home Assistant instance, pre-filled — no copy-pasting the GitHub URL by
+hand:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=brandonbrown15&repository=ROSE&category=integration)
+
+Then: **Download** → restart Home Assistant → click the "add integration"
+badge in [Configuring](#configuring) below.
+
+(If that link doesn't work for you — e.g. HACS isn't installed yet, or
+`my.home-assistant.io` can't reach your instance — do it manually instead:
+HACS → Integrations → ⋮ → Custom repositories → add
+`https://github.com/brandonbrown15/rose`, category **Integration** → search
+for **ROSE — Persistent AI Assistant** → install → restart.)
 
 `hacs.json` at the repository root declares the integration, and
 `custom_components/rose` sits at the repo root — HACS's standard layout for
@@ -34,7 +44,11 @@ cp -r custom_components/rose <config>/custom_components/rose
 
 ## Configuring
 
-**Settings → Devices & services → Add Integration → ROSE**:
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=rose)
+
+(Equivalent manual path: **Settings → Devices & services → Add Integration →
+ROSE**.) Enter the two values `scripts/setup.sh` printed at the end of Worker
+setup:
 
 | Field | Value |
 |---|---|
