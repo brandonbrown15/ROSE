@@ -77,7 +77,7 @@ That's what makes it safe for this repository to be public.
 - [`docs/cloudflare.md`](docs/cloudflare.md) — Worker, D1, and Vectorize details
 - [`docs/home-assistant.md`](docs/home-assistant.md) — the HA integration
 - [`docs/memory.md`](docs/memory.md) — how ROSE decides what to remember
-- [`docs/wake-word.md`](docs/wake-word.md) — getting a custom "Rose" wake word for voice satellites
+- [`docs/wake-word.md`](docs/wake-word.md) — a ready-made "Rose" wake word ([`wake-word/rose.tflite`](wake-word/rose.tflite)) for voice satellites, and how it was built
 
 ## License
 

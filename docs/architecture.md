@@ -59,6 +59,14 @@ the same `/chat` API the Home Assistant integration uses, so other projects
 (e.g. a separate assistant front-end) can talk to the same ROSE backend and
 share its memory.
 
+## 4. Wake word (`wake-word/`)
+
+A trained `micro_wake_word` model (`rose.tflite` + `rose.json` manifest) so
+voice satellites can listen for "Rose" specifically, independent of and
+unrelated to how `conversation.rose` works — see [`wake-word.md`](wake-word.md).
+`train_rose.py` is the training script that produced it, kept for
+reproducibility.
+
 ## Deployment
 
 `.github/workflows/deploy.yml` deploys the Worker with `wrangler deploy` on

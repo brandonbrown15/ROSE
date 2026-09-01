@@ -1,15 +1,16 @@
-# Wake word ("Hey Rose")
+# Wake word ("Rose")
 
-Short answer: **yes, possible** — but it needs a custom-trained model, and
-it's a separate piece from everything else in this repo.
+A trained "Rose" wake word model ships in this repo — [`wake-word/rose.tflite`](../wake-word/rose.tflite)
+— ready to install on a Home Assistant Voice Preview Edition or any
+ESPHome/`micro_wake_word` satellite. No training needed on your end; skip
+to [Installing it](#installing-it).
 
 ## Two different things
 
 - **The wake word** — the word a voice satellite listens for locally,
   always-on, before it starts streaming audio to Home Assistant's Assist
-  pipeline. Handled entirely by the satellite (an ESPHome device, a Wyoming
-  satellite, Home Assistant's Voice Preview Edition hardware, etc.) running
-  a wake-word engine — usually openWakeWord or ESPHome's `micro_wake_word`.
+  pipeline. Handled entirely by the satellite (Voice Preview Edition, an
+  ESPHome device, a Wyoming satellite) running `micro_wake_word`.
 - **The conversation agent** — what actually understands and replies to
   what you say *after* the satellite has already woken up and captured
   your sentence. That's `conversation.rose`, already built and working.
@@ -17,7 +18,7 @@ it's a separate piece from everything else in this repo.
 These are independent. You can use ROSE as your assistant today with
 whatever wake word your satellite already has (e.g. "Hey Jarvis" or
 "OK Nabu") — nothing about the wake word blocks or changes how
-`conversation.rose` works. Getting the wake word itself to be "Rose" is a
+`conversation.rose` works. Installing "Rose" as the wake word is a
 one-time, additional step on top, not a prerequisite.
 
 ## Choosing satellite hardware — and why Sonos/B&O can't be it
@@ -44,66 +45,90 @@ So: keep Sonos/B&O as ROSE's *voice* (they already sound better than any
 purpose-built satellite's tiny speaker), and add a small, cheap microphone
 device per room for the *listening* half — Home Assistant's own
 [Voice Preview Edition](https://www.home-assistant.io/voice-pe/) is the
-obvious pick (official, ESP32-S3, built for exactly this, works with a
-custom-trained wake word out of the box), or a DIY ESPHome satellite
-(M5Stack Atom Echo, etc.) if you'd rather build it yourself. Point that
-satellite's Assist pipeline output at your Sonos/B&O `media_player` entity
-instead of its own speaker — say "Rose" to the small mic puck, the reply
-comes out of your actual speakers.
+obvious pick (official, ESP32-S3, built for exactly this), or a DIY ESPHome
+satellite (M5Stack Atom Echo, etc.) if you'd rather build it yourself. Point
+that satellite's Assist pipeline output at your Sonos/B&O `media_player`
+entity instead of its own speaker — say "Rose" to the small mic puck, the
+reply comes out of your actual speakers.
 
-## Getting a custom "Rose" wake word
+## Installing it
 
-"Rose" isn't one of the handful of wake words Home Assistant ships by
-default, so it needs training. Two paths:
+1. Get the two files onto your Home Assistant instance: `wake-word/rose.tflite`
+   and `wake-word/rose.json` from this repo.
+2. **If you run the openWakeWord/`micro_wake_word` add-on** (Voice Preview
+   Edition and most Wyoming satellites go through it): copy both files into
+   the add-on's custom-model folder (via the Samba or File Editor add-on —
+   the exact path is shown on the add-on's own configuration page), then
+   pick "Rose" from the wake word dropdown for your satellite device under
+   **Settings → Devices & services → Voice Assistants** (or the satellite
+   device's own settings page).
+3. **If you're flashing an ESPHome satellite yourself**, reference
+   `rose.tflite` in the device's `micro_wake_word` YAML config as a local
+   model file and reflash.
+4. Say "Rose" to test it. If it doesn't trigger reliably, or triggers on
+   things that aren't "Rose", see [Known limitations](#known-limitations--if-you-want-a-more-robust-model) below —
+   `probability_cutoff` in `rose.json` (currently `0.85`) is the first
+   thing to tune: lower it if it's missing real "Rose"s, raise it if it's
+   firing on other words.
 
-### Option A — openWakeWord (recommended)
+## How this model was actually built
 
-Free, open source, and Home Assistant's actively-maintained default —
-matches ROSE's whole approach so far (no subscriptions needed beyond the
-OpenAI/Cloudflare costs you already have).
+Same real methodology the wider `micro_wake_word` community uses — this
+isn't a shortcut, just a smaller-scale run of it:
 
-1. **Train a model.** The [openWakeWord project](https://github.com/dscripka/openWakeWord)
-   provides a training notebook that synthesizes training audio for your
-   chosen word via text-to-speech + augmentation — you don't need to record
-   yourself saying it hundreds of times. Type "rose", run it (free Colab
-   GPU, roughly 20–40 minutes), and it outputs a small `.tflite`/`.onnx`
-   model file.
-2. **Install the model.**
-   - **openWakeWord add-on** (if your satellite runs through it — Voice
-     Preview Edition, an ATOM Echo, or a software/Wyoming satellite): copy
-     the model file into the add-on's custom-model folder (via Samba, SSH,
-     or the File Editor add-on), then select it for your satellite/Assist
-     pipeline under **Settings → Voice assistants**.
-   - **ESPHome-based satellite** (M5Stack, a custom ESP32-S3-BOX, etc.):
-     the `micro_wake_word` component takes a custom model reference in its
-     YAML config; re-flash the device with it included.
+- **5,000 positive samples** of "Rose" (US + UK pronunciation), synthesized
+  via [Piper](https://github.com/rhasspy/piper) text-to-speech — not real
+  recordings of anyone's voice.
+- **5,600 confusable-negative samples**: phonetically close words/phrases
+  ("close", "those", "grows", "rosa", "ross"...) and other assistants'
+  wake words ("hey siri", "hey google", "okay nabu"...), so the model
+  learns what to *not* trigger on.
+- **7,500 generic negative-speech samples**: everyday commands and phrases
+  unrelated to "Rose", also via Piper.
+- **MIT room-impulse-response reverb augmentation**, plus pitch/EQ/gain/
+  noise perturbations, applied to all of the above.
+- Trained with [kahrendt/microWakeWord](https://github.com/kahrendt/microWakeWord)
+  (the same training framework Home Assistant's own bundled wake words use)
+  for 5,000 steps. Final validation: 98.4% accuracy, 97.7% recall, 97.7%
+  precision, 0 estimated false positives/hour on the validation set.
+  `wake-word/train_rose.py` is the exact script used, kept here for
+  reproducibility.
 
-### Option B — Picovoice Porcupine
+### What's different from Home Assistant's own bundled wake words
 
-[console.picovoice.ai](https://console.picovoice.ai) generates a custom
-wake-word model (`.ppn`) instantly — no training wait — for a typed word,
-with a free tier for personal use. Higher out-of-the-box accuracy than a
-quick openWakeWord model, but proprietary, and Home Assistant's own tooling
-has shifted toward openWakeWord as the default path in recent releases, so
-check current HA docs for how well Porcupine integrates before committing
-to this route — that's shifted enough recently that I don't want to
-overstate today's exact support here.
+Their official recipe (and the [community trainer](https://github.com/alfiedennen/microwakeword-trainer)
+this was adapted from) additionally uses **~16GB of pre-computed negative
+examples** — real diverse recordings (dinner-party chatter, varied speech,
+ambient background noise) specifically chosen to harden against false
+triggers in noisy real-world environments — plus roughly 5x more training
+steps on a GPU. Building this model in a disk-constrained sandbox meant
+substituting Piper-synthesized negatives for that real-recording dataset,
+and fewer training steps on CPU.
 
-**Recommendation: openWakeWord.** Free, open, and the path Home Assistant
-itself is investing in.
+**What this means in practice:** the validation metrics above are strong,
+but validation ran against the *same kind* of synthetic data the model
+trained on — not real rooms with real background noise, TVs, other people
+talking, etc. Expect it to work well in a quiet room and possibly need
+`probability_cutoff` tuned upward if it false-triggers in a noisier one.
+It has not been tested against real hardware or a real voice yet — you are
+the first real-world test.
 
-## Once you have the model
+## Known limitations / if you want a more robust model
 
-Nothing in `custom_components/rose` needs to change. The wake word plugs
-into whichever Assist pipeline you already point at `conversation.rose`
-(**Settings → Voice assistants**) — it's satellite/pipeline configuration,
-not something this repo's code touches.
-
-## Not something to add to this repo
-
-The trained model itself is a personal artifact (tuned to your voice and
-accent), not shared infrastructure — it doesn't belong committed here the
-way the Worker or the HA integration does. This page is the guide; the
-actual training happens once you have satellite hardware in hand. Come back
-and ask if you hit friction on the exact YAML/add-on config once you're at
-that step — happy to help debug against real hardware.
+- **Untested against a real microphone/room.** Everything above is
+  synthetic. If it under- or over-triggers in practice, that's expected to
+  need tuning (`probability_cutoff`) or, for a real quality jump, retraining
+  with real recordings mixed in.
+- **No real background-noise corpus.** `AddBackgroundNoise` augmentation
+  was skipped entirely (no FMA/AudioSet datasets downloaded) — only reverb
+  and signal-level perturbations were applied. A model trained with real
+  background noise mixed in would likely be more robust in a busy kitchen
+  or living room.
+- **Fewer training steps than the official recipe** (5,000 vs. ~45,000) —
+  chosen to fit a CPU-only budget, not because more wouldn't help.
+- **To build a stronger version**: run the full recipe yourself via the
+  [community Colab notebook](https://github.com/alfiedennen/microwakeword-trainer)
+  (real GPU, ~45 min, the official negative dataset) and it'll drop in as a
+  replacement for `wake-word/rose.tflite` — same manifest format. Or open
+  an issue/PR here if you'd like to contribute an improved model trained
+  against the full dataset.
