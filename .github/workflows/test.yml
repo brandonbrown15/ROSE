@@ -27,4 +27,4 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile-check the integration's Python files
-        run: python -m py_compile home-assistant/custom_components/rose/*.py
+        run: python -m py_compile custom_components/rose/*.py

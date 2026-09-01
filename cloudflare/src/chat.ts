@@ -1,11 +1,19 @@
 import type { Env } from "./index";
+import { distillMemory } from "./distill";
 import { getRecentMessages, recordMessage, storeMemory } from "./memory";
 import { recall } from "./recall";
 
 interface ChatRequestBody {
   conversation_id?: string;
   text: string;
-  /** Set true to also distill and store this exchange as a durable memory. */
+  /**
+   * Controls long-term memory for this exchange:
+   *  - omitted (default): ROSE decides for itself whether this exchange
+   *    contains a durable fact worth remembering, and stores a distilled
+   *    summary if so. This is what you want almost always.
+   *  - true: force storage even if ROSE wouldn't otherwise remember it.
+   *  - false: never store this exchange, regardless of content.
+   */
   remember?: boolean;
 }
 
@@ -81,13 +89,23 @@ export async function handleChat(
   const reply = await completeChat(env, messages);
 
   // Persist the exchange for short-term context on the next turn, and
-  // optionally distill it into long-term memory. Both run after the
-  // response is composed so they never add latency to the reply.
+  // decide whether it's worth remembering long-term. All of this runs after
+  // the response is composed so it never adds latency to the reply.
   ctx.waitUntil(
     (async () => {
       await recordMessage(env, conversationId, "user", body.text);
       await recordMessage(env, conversationId, "assistant", reply);
-      if (body.remember) {
+
+      if (body.remember === false) {
+        return; // caller explicitly opted this exchange out
+      }
+
+      const decision = await distillMemory(env, body.text, reply);
+      if (decision.remember && decision.memory) {
+        await storeMemory(env, decision.memory, conversationId);
+      } else if (body.remember === true) {
+        // Caller forced storage but nothing distilled cleanly — fall back
+        // to the raw exchange rather than silently dropping it.
         await storeMemory(env, `User said: "${body.text}" — ROSE replied: "${reply}"`, conversationId);
       }
     })()

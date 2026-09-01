@@ -4,6 +4,12 @@ Source lives in [`cloudflare/`](../cloudflare).
 
 ## One-time setup
 
+`./scripts/setup.sh` (from the repo root) does all of this for you —
+installs dependencies, logs into Cloudflare, creates the D1 database and
+patches its id into `wrangler.jsonc` automatically, creates the Vectorize
+index, and applies the schema. The manual equivalent, if you want to run it
+yourself (e.g. to reuse an existing D1 database):
+
 ```bash
 cd cloudflare
 npm install
@@ -20,12 +26,13 @@ npx wrangler vectorize create rose-memory --dimensions=1536 --metric=cosine
 npm run db:migrate
 ```
 
-`scripts/setup.sh` runs the above for you interactively.
-
 ## Secrets
 
-Never put these in `wrangler.jsonc` or commit them — set them with
-`wrangler secret put`:
+`scripts/setup.sh` sets `OPENAI_API_KEY` and `ROSE_API_KEY` for you (the
+latter it generates itself). `HA_URL`/`HA_TOKEN` are optional and not set by
+either script — add them by hand if you want the Worker to call back into
+Home Assistant. Never put any of these in `wrangler.jsonc` or commit them —
+set them with `wrangler secret put`:
 
 ```bash
 npx wrangler secret put OPENAI_API_KEY
@@ -82,9 +89,13 @@ Requires `Authorization: Bearer <ROSE_API_KEY>`.
 {
   "conversation_id": "optional, omit to start a new conversation",
   "text": "what's on my calendar tomorrow?",
-  "remember": false
+  "remember": null
 }
 ```
+
+`remember` is optional and normally omitted entirely — ROSE decides on its
+own whether the exchange is worth storing long-term. Pass `true`/`false` only
+to override that decision for one request. See [`memory.md`](memory.md).
 
 Returns:
 
@@ -96,4 +107,7 @@ Returns:
 }
 ```
 
-See [`memory.md`](memory.md) for what `remember` does and how recall works.
+`memories_used` counts how many recalled memories were fed into the reply —
+it doesn't reflect whether this exchange itself got remembered (that
+decision happens after the reply, in the background). See
+[`memory.md`](memory.md) for the full flow.

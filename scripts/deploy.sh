@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Deploy the ROSE Cloudflare Worker. Pushes secrets from .env (if present)
-# and runs `wrangler deploy`. Intended for manual/local deploys — CI uses
-# .github/workflows/deploy.yml instead.
+# Redeploy the ROSE Cloudflare Worker after code or secret changes.
+# `scripts/setup.sh` already does this once as part of first-time setup —
+# use this script for subsequent deploys. Pushes secrets from .env (if
+# present) and runs `wrangler deploy`. CI uses .github/workflows/deploy.yml
+# instead for pushes to main.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
