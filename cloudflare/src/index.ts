@@ -1,4 +1,5 @@
 import { handleChat } from "./chat";
+import { handleEnergyRun, handleEnergyStatus, runEnergyOptimization } from "./energy";
 
 export interface Env {
   DB: D1Database;
@@ -13,6 +14,20 @@ export interface Env {
   // Plain vars, safe to keep in wrangler.jsonc.
   OPENAI_CHAT_MODEL: string;
   OPENAI_EMBEDDING_MODEL: string;
+
+  // Energy optimization — all optional, all off unless every one of the
+  // required fields below is set. See docs/energy.md. Stored as secrets for
+  // setup simplicity even where the value isn't actually sensitive.
+  ENERGY_OPTIMIZATION_ENABLED?: string; // "true" to enable; anything else (including unset) is off
+  OCTOPUS_REGION?: string; // single letter, A-P
+  OCTOPUS_PRODUCT_CODE?: string; // optional override; auto-detected if unset
+  MET_OFFICE_API_KEY?: string;
+  MET_OFFICE_LATITUDE?: string;
+  MET_OFFICE_LONGITUDE?: string;
+  ROSE_HEATPUMP_ENTITY_ID?: string; // e.g. climate.living_room_heat_pump
+  ROSE_ROOM_TEMP_ENTITY_ID?: string; // e.g. sensor.living_room_temperature
+  ROSE_HEATING_MIN_TEMP?: string; // °C, hard floor — never overridden for cost
+  ROSE_HEATING_MAX_TEMP?: string; // °C, hard ceiling — never overridden for cost
 }
 
 function unauthorized(): Response {
@@ -48,9 +63,28 @@ export default {
       return handleChat(request, env, ctx);
     }
 
+    if (url.pathname === "/energy/status" && request.method === "GET") {
+      return handleEnergyStatus(env);
+    }
+
+    if (url.pathname === "/energy/run" && request.method === "POST") {
+      return handleEnergyRun(env);
+    }
+
     return new Response(JSON.stringify({ error: "not found" }), {
       status: 404,
       headers: { "content-type": "application/json" },
     });
+  },
+
+  // Cloudflare Cron Trigger (see wrangler.jsonc `triggers.crons`) — recomputes
+  // the heating plan and applies the current slot's target temperature.
+  // No-op unless ENERGY_OPTIMIZATION_ENABLED="true" and every required field
+  // in Env is set — see docs/energy.md.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (env.ENERGY_OPTIMIZATION_ENABLED !== "true") return;
+    ctx.waitUntil(
+      runEnergyOptimization(env).catch((err) => console.error("scheduled energy optimization failed", err))
+    );
   },
 } satisfies ExportedHandler<Env>;

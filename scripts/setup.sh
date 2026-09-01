@@ -88,3 +88,42 @@ cat <<EOF
     See docs/home-assistant.md for the integration install steps.
 
 EOF
+
+# --- Optional: energy optimization (heat pump scheduling) ------------------
+# Off by default and skipped here unless you opt in — it needs several
+# manual prerequisites (a public HA URL, a Met Office API key, your Octopus
+# region, entity IDs) that nothing can script for you. Read docs/energy.md
+# before saying yes; this section just collects the values and pushes them
+# as secrets, it doesn't explain the safety model.
+read -rp "Set up energy optimization (Octopus Agile + Met Office heat pump scheduling) now? [y/N] " setup_energy
+if [[ "$setup_energy" =~ ^[Yy]$ ]]; then
+  echo "See docs/energy.md if you haven't read it yet — this needs a Home Assistant URL reachable from the internet."
+  read -rp "  HA URL (e.g. your Cloudflare Tunnel or Nabu Casa URL): " ENERGY_HA_URL
+  read -rsp "  HA long-lived access token (input hidden): " ENERGY_HA_TOKEN; echo
+  read -rp "  Octopus Agile region letter (A-P): " ENERGY_OCTOPUS_REGION
+  read -rsp "  Met Office DataHub API key (input hidden): " ENERGY_MET_OFFICE_API_KEY; echo
+  read -rp "  Site latitude (for the weather forecast): " ENERGY_MET_OFFICE_LAT
+  read -rp "  Site longitude: " ENERGY_MET_OFFICE_LON
+  read -rp "  Heat pump climate entity ID (e.g. climate.living_room_heat_pump): " ENERGY_HEATPUMP_ENTITY
+  read -rp "  Room temperature sensor entity ID (e.g. sensor.living_room_temperature): " ENERGY_ROOM_TEMP_ENTITY
+  read -rp "  Minimum comfort temperature, °C: " ENERGY_MIN_TEMP
+  read -rp "  Maximum comfort temperature, °C: " ENERGY_MAX_TEMP
+
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_HA_URL" | npx wrangler secret put HA_URL)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_HA_TOKEN" | npx wrangler secret put HA_TOKEN)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_OCTOPUS_REGION" | npx wrangler secret put OCTOPUS_REGION)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_MET_OFFICE_API_KEY" | npx wrangler secret put MET_OFFICE_API_KEY)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_MET_OFFICE_LAT" | npx wrangler secret put MET_OFFICE_LATITUDE)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_MET_OFFICE_LON" | npx wrangler secret put MET_OFFICE_LONGITUDE)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_HEATPUMP_ENTITY" | npx wrangler secret put ROSE_HEATPUMP_ENTITY_ID)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_ROOM_TEMP_ENTITY" | npx wrangler secret put ROSE_ROOM_TEMP_ENTITY_ID)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_MIN_TEMP" | npx wrangler secret put ROSE_HEATING_MIN_TEMP)
+  (cd "$CF_DIR" && printf '%s' "$ENERGY_MAX_TEMP" | npx wrangler secret put ROSE_HEATING_MAX_TEMP)
+  (cd "$CF_DIR" && printf 'true' | npx wrangler secret put ENERGY_OPTIMIZATION_ENABLED)
+
+  echo "==> Energy optimization enabled. Test it now before trusting the schedule:"
+  echo "      curl -X POST <your-worker-url>/energy/run -H \"Authorization: Bearer $ROSE_API_KEY\""
+  echo "    See 'Testing before you trust it' in docs/energy.md."
+else
+  echo "Skipped — enable it later any time by following docs/energy.md."
+fi

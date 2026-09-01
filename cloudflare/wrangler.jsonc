@@ -28,10 +28,20 @@
     }
   ],
 
-  // Non-secret configuration. Secrets (OPENAI_API_KEY, ROSE_API_KEY, HA_TOKEN)
-  // are set with `wrangler secret put <NAME>` and must never be listed here.
+  // Non-secret configuration. Secrets (OPENAI_API_KEY, ROSE_API_KEY, HA_TOKEN,
+  // and the energy-optimization config in docs/energy.md) are set with
+  // `wrangler secret put <NAME>` and must never be listed here.
   "vars": {
     "OPENAI_CHAT_MODEL": "gpt-4o-mini",
     "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small"
+  },
+
+  // Drives the optional energy-optimization scheduled() handler every 30
+  // minutes (aligned with Octopus Agile's half-hourly slots). It's a no-op
+  // unless ENERGY_OPTIMIZATION_ENABLED="true" is set — see docs/energy.md.
+  // Note: cron triggers only fire on a deployed Worker, not `wrangler dev`
+  // (use `wrangler dev --test-scheduled` to trigger it locally instead).
+  "triggers": {
+    "crons": ["*/30 * * * *"]
   }
 }

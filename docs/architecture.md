@@ -21,12 +21,21 @@ A Cloudflare Worker that is the actual "brain":
 - **`src/recall.ts`** — embeds a query and searches Vectorize for the closest
   stored memories, resolving the matching text back out of D1.
 - **`src/ha.ts`** — an optional callback path so ROSE can read Home Assistant
-  entity state or call services while composing a reply.
+  entity state or call services while composing a reply — also what the
+  energy optimizer below uses to read room temperature and control the heat
+  pump.
+- **`src/energy.ts`**, **`src/octopus.ts`**, **`src/metoffice.ts`** —
+  optional, off by default: a deterministic (not LLM-driven) heat pump
+  scheduler that ranks Octopus Agile price slots by efficiency-adjusted cost
+  using a Met Office forecast, and applies the current slot's target
+  temperature to a Home Assistant `climate` entity via `ha.ts`. Runs on a
+  Cloudflare Cron Trigger (`wrangler.jsonc` → `triggers.crons`), not on the
+  request path. See [`energy.md`](energy.md).
 
 Storage:
 
-- **D1** (`migrations/0001_initial.sql`) — `conversations`, `messages`,
-  `memories`.
+- **D1** (`migrations/0001_initial.sql`, `0002_energy.sql`) —
+  `conversations`, `messages`, `memories`, `energy_plans`.
 - **Vectorize** — one vector per memory, keyed by `memories.id`.
 
 ```
@@ -37,9 +46,16 @@ Home Assistant  ──HTTP (Bearer ROSE_API_KEY)──▶  Cloudflare Worker
                                                     │
                                                     ▼
                                                  OpenAI
+
+Cloudflare Cron (every 30 min, optional)  ──▶  energy.ts
+                                                  │    │
+                                          Octopus │    │ Met Office
+                                                  ▼    ▼
+                                          heat pump plan ──▶ Home Assistant
+                                          (climate.set_temperature)
 ```
 
-## 2. ROSE Home Assistant (`home-assistant/`)
+## 2. ROSE Home Assistant (`custom_components/rose/`)
 
 A `custom_components/rose` integration that:
 
