@@ -1,6 +1,14 @@
 import type { Env } from "./index";
 import { distillMemory } from "./distill";
-import { getRecentMessages, recordMessage, storeMemory } from "./memory";
+import { identifySpeaker } from "./identify";
+import {
+  getConversationPersonId,
+  getRecentMessages,
+  recordMessage,
+  setConversationPerson,
+  storeMemory,
+} from "./memory";
+import { findOrCreatePerson, listPeople, type Person } from "./people";
 import { recall } from "./recall";
 
 interface ChatRequestBody {
@@ -22,11 +30,24 @@ interface ChatCompletionMessage {
   content: string;
 }
 
-const SYSTEM_PROMPT =
-  "You are ROSE, a persistent, helpful assistant embedded in a Home Assistant " +
-  "installation. Use the RELEVANT MEMORIES section (if present) to stay " +
-  "consistent with what you've been told before. Keep replies concise — " +
-  "they may be read aloud.";
+function buildSystemPrompt(personName: string | null): string {
+  const base =
+    "You are ROSE, a persistent, helpful assistant embedded in a Home Assistant " +
+    "installation. Use the RELEVANT MEMORIES section (if present) to stay " +
+    "consistent with what you've been told before. Keep replies concise — " +
+    "they may be read aloud.";
+
+  const personGuidance = personName
+    ? ` You're currently speaking with ${personName}. Personal memories in ` +
+      "RELEVANT MEMORIES belong to them specifically, not the household at large."
+    : " You don't currently know who you're speaking with — memories in " +
+      "RELEVANT MEMORIES (if any) are household-wide, not personal to anyone. " +
+      "If knowing who's asking would meaningfully change your answer (e.g. " +
+      '"what\'s on my calendar"), you may ask who you\'re talking to — but ' +
+      "don't ask on every message, only when it actually matters.";
+
+  return base + personGuidance;
+}
 
 async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promise<string> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -72,12 +93,29 @@ export async function handleChat(
 
   const conversationId = body.conversation_id ?? crypto.randomUUID();
 
-  const [history, memories] = await Promise.all([
+  const [history, people, existingPersonId] = await Promise.all([
     getRecentMessages(env, conversationId),
-    recall(env, body.text),
+    listPeople(env),
+    getConversationPersonId(env, conversationId),
   ]);
 
-  const messages: ChatCompletionMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  const existingPerson = people.find((p) => p.id === existingPersonId) ?? null;
+
+  // Does *this* message identify (or hand off to) a speaker? Runs before
+  // recall so a message that both introduces someone and asks something
+  // personal ("this is Sarah, what's on my calendar?") gets that person's
+  // memories on the very same turn, not starting next turn.
+  const identified = await identifySpeaker(env, body.text, people, existingPerson?.name ?? null);
+  let resolvedPerson: Person | null = existingPerson;
+  if (identified.name) {
+    resolvedPerson = await findOrCreatePerson(env, identified.name);
+  }
+
+  const memories = await recall(env, body.text, resolvedPerson?.id ?? null);
+
+  const messages: ChatCompletionMessage[] = [
+    { role: "system", content: buildSystemPrompt(resolvedPerson?.name ?? null) },
+  ];
 
   if (memories.length > 0) {
     const memoryBlock = memories.map((m) => `- ${m.content}`).join("\n");
@@ -96,23 +134,34 @@ export async function handleChat(
       await recordMessage(env, conversationId, "user", body.text);
       await recordMessage(env, conversationId, "assistant", reply);
 
+      if (resolvedPerson && resolvedPerson.id !== existingPersonId) {
+        await setConversationPerson(env, conversationId, resolvedPerson.id);
+      }
+
       if (body.remember === false) {
         return; // caller explicitly opted this exchange out
       }
 
-      const decision = await distillMemory(env, body.text, reply);
+      const decision = await distillMemory(env, body.text, reply, resolvedPerson?.name ?? null);
       if (decision.remember && decision.memory) {
-        await storeMemory(env, decision.memory, conversationId);
+        const personId = decision.scope === "person" ? resolvedPerson?.id ?? null : null;
+        await storeMemory(env, decision.memory, conversationId, personId);
       } else if (body.remember === true) {
         // Caller forced storage but nothing distilled cleanly — fall back
-        // to the raw exchange rather than silently dropping it.
-        await storeMemory(env, `User said: "${body.text}" — ROSE replied: "${reply}"`, conversationId);
+        // to the raw exchange rather than silently dropping it. Household-
+        // wide, since we don't know it's specifically personal.
+        await storeMemory(env, `User said: "${body.text}" — ROSE replied: "${reply}"`, conversationId, null);
       }
     })()
   );
 
   return new Response(
-    JSON.stringify({ conversation_id: conversationId, reply, memories_used: memories.length }),
+    JSON.stringify({
+      conversation_id: conversationId,
+      reply,
+      memories_used: memories.length,
+      person: resolvedPerson?.name ?? null,
+    }),
     { headers: { "content-type": "application/json" } }
   );
 }

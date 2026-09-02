@@ -48,6 +48,58 @@ The Home Assistant integration leaves this at the default — it never sends
 `remember` unless something explicitly calls `async_chat(..., remember=True)`
 or `remember=False` — so normal conversations get the automatic behavior.
 
+## Personalization: who's talking
+
+ROSE can attribute memories to a specific household member instead of the
+household at large — "Sarah takes her coffee black" vs. "the office
+thermostat should stay at 68°F" — so recall stays relevant to whoever's
+actually asking.
+
+**Identity here is entirely self-reported.** ROSE only ever sees
+already-transcribed text from Home Assistant's voice pipeline, never raw
+audio, so there's no voice biometrics involved — someone has to actually
+say who they are (e.g. "this is Sarah, what's on my calendar?"). This is a
+real, deliberate limitation, not a placeholder for something smarter
+happening silently — see [Future: real voice identification](#future-real-voice-identification-phase-2)
+below for what a from-audio version would actually require.
+
+On every `/chat` request, `identify.ts` asks the model one narrow question:
+does *this specific message* state who's speaking (a self-introduction, or a
+handoff to a different known person)? If so, `people.ts` resolves that name
+to a household member (creating one if this is the first time they've come
+up), and the conversation stays attributed to them — via
+`conversations.person_id` — until someone else identifies themselves in the
+same conversation. If a message doesn't say, nothing changes: the
+conversation keeps whatever attribution (or lack of one) it already had.
+
+That attribution then feeds two things on the same turn:
+
+- **Recall** (`recall.ts`) filters out memories that belong to a *different*
+  specific person — household-wide memories (no `person_id`) always come
+  through regardless.
+- **Distillation** (`distill.ts`) additionally decides *scope* — is this new
+  fact about the currently-identified person specifically, or true
+  regardless of who's asking — and stores it with the matching `person_id`
+  (or `NULL` for household-wide).
+
+When nobody's identified, everything behaves exactly as before: recall and
+storage both operate household-wide only, and the system prompt tells the
+model it may ask who it's talking to, but only when that would actually
+change the answer — not on every message.
+
+### Future: real voice identification (phase 2)
+
+The above requires someone to say who they are; it can't recognize a voice
+on its own. Doing that for real would mean inserting a new stage *before*
+Home Assistant's speech-to-text step — since by the time text reaches
+`conversation.rose`, the audio is already gone — to extract a voice
+embedding from the incoming audio and match it against enrolled voiceprints
+per person. That's meaningfully new infrastructure (an enrollment flow, a
+speaker-embedding model, and a way to get the result into ROSE's context
+before or alongside transcription), not an extension of what's described
+here. Worth doing if self-identification turns out to be too much friction
+in practice — not before.
+
 ## Recall
 
 On every `/chat` request, `recall.ts` embeds the incoming text and queries
@@ -79,6 +131,14 @@ short-term history  +  RELEVANT MEMORIES  ──▶  chat completion
 
 ## Design notes / future work
 
+- **Identification runs on the request's critical path, unlike
+  distillation.** `distill.ts` runs in the background after the reply is
+  already sent, so it never adds latency or blocks on failure. `identify.ts`
+  can't do that — the whole point is letting a single message both identify
+  someone *and* get a personalized answer on that same turn — so it's one
+  more OpenAI round-trip before every reply. In practice this is comparable
+  cost to the embedding call recall already made on every request; still,
+  it's a real, deliberate latency/cost tradeoff, not a free addition.
 - Distillation and recall both use `OPENAI_CHAT_MODEL` today; a separate,
   cheaper model for distillation (it's a small classification/summarization
   task, not a conversational reply) would cut cost without hurting quality —
