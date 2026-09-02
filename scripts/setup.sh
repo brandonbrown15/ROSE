@@ -22,8 +22,27 @@ fi
 if [ ! -f "$ENV_FILE" ]; then
   cp "$ROOT_DIR/.env.example" "$ENV_FILE"
 fi
+
+# .env should only fill in values that aren't already set in the shell —
+# never clobber something the caller explicitly exported (e.g. someone
+# running with CLOUDFLARE_API_TOKEN set for a non-interactive wrangler
+# session, since .env.example ships that key blank for local/interactive
+# use). Plain `source` doesn't respect that on its own, so preserve
+# whatever's already set and restore it after.
+ENV_KEYS="OPENAI_API_KEY ROSE_API_KEY HA_URL HA_TOKEN CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID"
+for key in $ENV_KEYS; do
+  declare "PRESERVED_$key=${!key:-}"
+done
+
 # shellcheck disable=SC1090
 set -a && source "$ENV_FILE" && set +a
+
+for key in $ENV_KEYS; do
+  preserved_var="PRESERVED_$key"
+  if [ -n "${!preserved_var}" ]; then
+    export "$key=${!preserved_var}"
+  fi
+done
 
 # --- OPENAI_API_KEY: the one thing we genuinely can't generate for you ----
 if [ -z "${OPENAI_API_KEY:-}" ]; then
