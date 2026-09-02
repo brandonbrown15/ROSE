@@ -10,8 +10,18 @@ export interface RecalledMemory {
 /**
  * Semantic recall: embed the query, search Vectorize for the closest stored
  * memories, and return the matching text pulled back from D1.
+ *
+ * `personId` filters out memories that belong to a *different* specific
+ * person — household-wide memories (no person_id) always pass through.
+ * Pass null when no speaker is currently identified, which surfaces
+ * household-wide memories only.
  */
-export async function recall(env: Env, query: string, topK = 5): Promise<RecalledMemory[]> {
+export async function recall(
+  env: Env,
+  query: string,
+  personId: string | null,
+  topK = 5
+): Promise<RecalledMemory[]> {
   const vector = await embed(env, query);
   const matches = await env.MEMORY_INDEX.query(vector, { topK, returnMetadata: false });
 
@@ -22,14 +32,17 @@ export async function recall(env: Env, query: string, topK = 5): Promise<Recalle
   const ids = matches.matches.map((m) => m.id);
   const placeholders = ids.map((_, i) => `?${i + 1}`).join(", ");
   const { results } = await env.DB.prepare(
-    `SELECT id, content FROM memories WHERE id IN (${placeholders})`
+    `SELECT id, content, person_id FROM memories WHERE id IN (${placeholders})`
   )
     .bind(...ids)
-    .all<{ id: string; content: string }>();
+    .all<{ id: string; content: string; person_id: string | null }>();
 
-  const contentById = new Map(results.map((r) => [r.id, r.content]));
+  const rowById = new Map(results.map((r) => [r.id, r]));
 
   return matches.matches
-    .filter((m) => contentById.has(m.id))
-    .map((m) => ({ id: m.id, content: contentById.get(m.id)!, score: m.score }));
+    .filter((m) => {
+      const row = rowById.get(m.id);
+      return row !== undefined && (row.person_id === null || row.person_id === personId);
+    })
+    .map((m) => ({ id: m.id, content: rowById.get(m.id)!.content, score: m.score }));
 }

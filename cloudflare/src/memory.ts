@@ -68,18 +68,48 @@ export async function getRecentMessages(
 
 /**
  * Persist a durable memory: store the text in D1 and its embedding in
- * Vectorize, linked by id.
+ * Vectorize, linked by id. `personId` attributes it to a specific household
+ * member (see people.ts); omitted or null means a household-wide fact,
+ * visible regardless of who's asking.
  */
-export async function storeMemory(env: Env, content: string, source?: string): Promise<Memory> {
+export async function storeMemory(
+  env: Env,
+  content: string,
+  source?: string,
+  personId?: string | null
+): Promise<Memory> {
   const id = crypto.randomUUID();
   const vector = await embed(env, content);
 
   await Promise.all([
-    env.DB.prepare(`INSERT INTO memories (id, content, source) VALUES (?1, ?2, ?3)`)
-      .bind(id, content, source ?? null)
+    env.DB.prepare(`INSERT INTO memories (id, content, source, person_id) VALUES (?1, ?2, ?3, ?4)`)
+      .bind(id, content, source ?? null, personId ?? null)
       .run(),
     env.MEMORY_INDEX.insert([{ id, values: vector, metadata: { source: source ?? "" } }]),
   ]);
 
   return { id, content, source, createdAt: new Date().toISOString() };
+}
+
+/** The person a conversation is currently attributed to, if any. */
+export async function getConversationPersonId(env: Env, conversationId: string): Promise<string | null> {
+  const row = await env.DB.prepare(`SELECT person_id FROM conversations WHERE id = ?1`)
+    .bind(conversationId)
+    .first<{ person_id: string | null }>();
+  return row?.person_id ?? null;
+}
+
+/** Attribute a conversation to a person from here on, creating the
+ * conversation row if this is somehow called before its first message. */
+export async function setConversationPerson(
+  env: Env,
+  conversationId: string,
+  personId: string
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO conversations (id, person_id) VALUES (?1, ?2)
+     ON CONFLICT(id) DO UPDATE SET person_id = ?2, updated_at = datetime('now')`
+  )
+    .bind(conversationId, personId)
+    .run();
 }
