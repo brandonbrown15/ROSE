@@ -15,6 +15,25 @@ export interface Env {
   OPENAI_EMBEDDING_MODEL: string;
 }
 
+// Permissive CORS: this API is protected by its own bearer-token check
+// (isAuthorized below), not by same-origin/cookie assumptions, so allowing
+// any origin doesn't weaken that — it just lets a browser-based client
+// (e.g. a standalone chat page) call this API directly, which the
+// Cloudflare Workers runtime doesn't allow by default.
+const CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "authorization, content-type",
+};
+
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, { status: response.status, headers });
+}
+
 function unauthorized(): Response {
   return new Response(JSON.stringify({ error: "unauthorized" }), {
     status: 401,
@@ -32,25 +51,35 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    // Browsers send this before the real cross-origin request (a
+    // "preflight") to ask permission — no auth, no body, just headers.
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
     // Unauthenticated health check, useful for the HA config flow's
     // "test connection" step and for uptime monitoring.
     if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "content-type": "application/json" },
-      });
+      return withCors(
+        new Response(JSON.stringify({ status: "ok" }), {
+          headers: { "content-type": "application/json" },
+        })
+      );
     }
 
     if (!isAuthorized(request, env)) {
-      return unauthorized();
+      return withCors(unauthorized());
     }
 
     if (url.pathname === "/chat" && request.method === "POST") {
-      return handleChat(request, env, ctx);
+      return withCors(await handleChat(request, env, ctx));
     }
 
-    return new Response(JSON.stringify({ error: "not found" }), {
-      status: 404,
-      headers: { "content-type": "application/json" },
-    });
+    return withCors(
+      new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      })
+    );
   },
 } satisfies ExportedHandler<Env>;

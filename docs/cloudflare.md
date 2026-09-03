@@ -114,3 +114,14 @@ Returns:
 it doesn't reflect whether this exchange itself got remembered (that
 decision happens after the reply, in the background). See
 [`memory.md`](memory.md) for the full flow.
+
+### CORS
+
+Every response carries permissive CORS headers (`access-control-allow-origin: *`),
+so a browser-based client — a standalone chat page, a personal dashboard —
+can call this API directly, not just server-side clients like the Home
+Assistant integration. This doesn't weaken anything: the API is still
+gated by the same `Authorization: Bearer <ROSE_API_KEY>` check regardless
+of where the request comes from. CORS only controls which *websites'*
+JavaScript is allowed to read the response — it has no bearing on
+authentication.
