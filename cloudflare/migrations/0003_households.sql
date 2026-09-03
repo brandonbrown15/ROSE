@@ -23,12 +23,26 @@ CREATE TABLE IF NOT EXISTS households (
 
 -- Bootstrap household: this deployment's own pre-existing (single-tenant)
 -- data backfills to this one via the DEFAULT on each ALTER TABLE below.
-INSERT INTO households (id, name, api_key) VALUES ('default', 'Default household', NULL);
+-- ON CONFLICT DO NOTHING: defensive idempotency in case this statement
+-- alone ever succeeds in a run that fails on a later statement — D1 runs
+-- each migration file as one transaction so a later failure rolls this
+-- back too, but there's no cost to being safe either way.
+INSERT INTO households (id, name, api_key) VALUES ('default', 'Default household', NULL)
+  ON CONFLICT(id) DO NOTHING;
 
-ALTER TABLE conversations ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default' REFERENCES households(id);
-ALTER TABLE messages      ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default' REFERENCES households(id);
-ALTER TABLE memories      ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default' REFERENCES households(id);
-ALTER TABLE people        ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default' REFERENCES households(id);
+-- No REFERENCES clause here on purpose: SQLite (and D1) rejects
+-- `ALTER TABLE ADD COLUMN` when a REFERENCES clause is combined with a
+-- non-NULL DEFAULT ("Cannot add a REFERENCES column with non-NULL
+-- default value") — confirmed directly against a live D1 database, not
+-- just docs. household_id is still a real foreign key conceptually
+-- (see households.id above), just not one SQLite will let this
+-- particular ALTER TABLE express — D1 doesn't enforce FK constraints at
+-- runtime by default anyway (no PRAGMA foreign_keys=ON), so nothing
+-- functional is lost.
+ALTER TABLE conversations ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE messages      ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE memories      ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE people        ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
 
 CREATE INDEX IF NOT EXISTS idx_conversations_household_id ON conversations (household_id);
 CREATE INDEX IF NOT EXISTS idx_messages_household_conversation ON messages (household_id, conversation_id);
