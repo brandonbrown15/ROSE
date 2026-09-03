@@ -27,8 +27,18 @@ about the household or its people/pets/schedule, a standing instruction, or \
 a correction to something ROSE got wrong.
 
 Do NOT remember: small talk, one-off questions, a request to control a \
-device "right now" with no standing preference behind it, or anything \
-trivial or already obvious.
+device "right now" with no standing preference behind it, anything trivial \
+or already obvious, or a statement that isn't actually sincere — an \
+obvious joke, roleplay, or exaggeration rather than a genuine fact about \
+the person. A household includes kids and playful adults, and people say \
+made-up or fantastical things without meaning them literally (e.g. "I'm \
+secretly a dragon" or "I never have to go to bed") — don't store those as \
+if they were real. An ordinary-sounding preference stated the same way \
+("I like pizza") is still fine to remember; the test is plausibility and \
+sincerity, not enthusiasm or phrasing. When genuinely unsure whether \
+something was said seriously, don't remember it — a real fact missed this \
+time just gets mentioned again; a fictional one stored as real doesn't \
+correct itself.
 
 ${scopeGuidance}
 
