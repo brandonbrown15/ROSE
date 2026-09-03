@@ -129,6 +129,24 @@ short-term history  +  RELEVANT MEMORIES  ──▶  chat completion
                                           yes ──▶ storeMemory()
 ```
 
+## Persona / system prompt
+
+ROSE's personality and behavior guidance lives in `ROSE_PERSONA` in
+[`chat.ts`](../cloudflare/src/chat.ts) — a plain string, edited and deployed
+like any other code, not something managed from the OpenAI dashboard (ROSE
+calls the Chat Completions API with an inline prompt, not a hosted Prompt
+object). `buildSystemPrompt()` appends the person/memory guidance described
+above onto it per-request; the persona text itself doesn't need to know
+anything about memory scoping.
+
+One thing intentionally left out: don't ask the model for a separate hidden
+"reasoning" section before its reply. There's no hidden channel in a plain
+chat completion — the whole response text becomes the reply verbatim (see
+`completeChat` in `chat.ts`), so a literal "Reasoning (internal): ... /
+Response: ..." structure would just show up as visible text in the chat
+window instead of staying hidden. "Think it through, then answer" is fine;
+asking it to print that thinking is not.
+
 ## Design notes / future work
 
 - **Identification runs on the request's critical path, unlike
