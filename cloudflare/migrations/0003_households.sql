@@ -36,9 +36,10 @@ INSERT INTO households (id, name, api_key) VALUES ('default', 'Default household
 -- default value") — confirmed directly against a live D1 database, not
 -- just docs. household_id is still a real foreign key conceptually
 -- (see households.id above), just not one SQLite will let this
--- particular ALTER TABLE express — D1 doesn't enforce FK constraints at
--- runtime by default anyway (no PRAGMA foreign_keys=ON), so nothing
--- functional is lost.
+-- particular ALTER TABLE express. Unlike what an earlier version of
+-- this comment assumed, D1 *does* enforce foreign keys at runtime by
+-- default (also confirmed live, the hard way — see defer_foreign_keys
+-- below) — this ALTER TABLE restriction just isn't related to that.
 ALTER TABLE conversations ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
 ALTER TABLE messages      ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
 ALTER TABLE memories      ADD COLUMN household_id TEXT NOT NULL DEFAULT 'default';
@@ -55,6 +56,19 @@ CREATE INDEX IF NOT EXISTS idx_people_household_id ON people (household_id);
 -- "<household_id>:<slug>" going forward — rewrite existing ids (and the
 -- conversations.person_id / memories.person_id columns that reference
 -- them) to match, so nothing already stored breaks or duplicates.
+--
+-- D1 enforces foreign keys at runtime (confirmed live — see the ALTER
+-- TABLE comment above), so renaming people.id while it's referenced by
+-- conversations.person_id/memories.person_id needs those three updates
+-- treated as one atomic change, not three independent ones: whichever
+-- order they run in, there's a moment where a person_id column points
+-- at an id that doesn't exist yet (the old id if people.id already
+-- changed, or the new prefixed one if it hasn't). defer_foreign_keys
+-- delays FK *checking* until this transaction commits — SQLite/D1 still
+-- runs the statements in order, it just doesn't validate the
+-- constraint until everything below has happened, by which point
+-- they agree again.
+PRAGMA defer_foreign_keys = ON;
 UPDATE memories      SET person_id = 'default:' || person_id WHERE person_id IS NOT NULL;
 UPDATE conversations SET person_id = 'default:' || person_id WHERE person_id IS NOT NULL;
 UPDATE people         SET id        = 'default:' || id;
