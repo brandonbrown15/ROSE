@@ -10,6 +10,9 @@ export interface Env {
   ROSE_API_KEY: string;
   HA_URL?: string;
   HA_TOKEN?: string;
+  // Optional — enables the web_search tool (see search.ts) when set. Absent,
+  // ROSE just doesn't offer that tool and answers from what it already knows.
+  BRAVE_SEARCH_API_KEY?: string;
 
   // Plain vars, safe to keep in wrangler.jsonc.
   OPENAI_CHAT_MODEL: string;
