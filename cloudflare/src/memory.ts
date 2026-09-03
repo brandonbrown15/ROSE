@@ -78,16 +78,21 @@ export async function getRecentMessages(
  * member (see people.ts); omitted or null means a fact for everyone in that
  * household, visible regardless of who's asking (but never to a *different*
  * household — see recall.ts).
+ *
+ * Takes an already-computed `vector` rather than embedding `content` itself
+ * — callers need that same vector beforehand anyway, to check
+ * `findSimilarMemory` (dedupe.ts) before deciding to store at all, and
+ * embedding is a real OpenAI call not worth paying for twice.
  */
 export async function storeMemory(
   env: Env,
   content: string,
   householdId: string,
+  vector: number[],
   source?: string,
   personId?: string | null
 ): Promise<Memory> {
   const id = crypto.randomUUID();
-  const vector = await embed(env, content);
 
   await Promise.all([
     env.DB.prepare(
