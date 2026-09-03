@@ -45,6 +45,19 @@ jobs:
         env:
           DB_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
 
+      # Applies any migrations not yet recorded as run against the live
+      # database (wrangler tracks that itself — a migration already applied
+      # is a safe no-op here, so this runs unconditionally on every deploy
+      # rather than only when a migration file changed). Runs before Deploy
+      # so new code never reaches a schema it expects but doesn't have yet.
+      - name: Run D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare
+          command: d1 migrations apply rose-db --remote
+
       - name: Deploy
         uses: cloudflare/wrangler-action@v3
         with:
