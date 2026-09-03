@@ -68,16 +68,30 @@ npm run deploy
 
 ### GitHub Actions deploys
 
-`.github/workflows/deploy.yml` runs `wrangler deploy` on every push to `main`
-that touches `cloudflare/`. It needs these repository secrets
-(**Settings → Secrets and variables → Actions**):
+This is what lets updates ship without anyone running `wrangler deploy` from
+a local checkout — merge to `main`, GitHub deploys it. `.github/workflows/deploy.yml`
+runs `wrangler deploy` on every push to `main` that touches `cloudflare/`
+(or the workflow file itself), and can also be triggered by hand from the
+**Actions** tab (`workflow_dispatch`) without a code change at all.
+
+It needs two repository secrets, added once via
+**Settings → Secrets and variables → Actions → New repository secret** (in
+the browser, not a local `.env` — GitHub encrypts these and only exposes
+them to workflow runs):
 
 - `CLOUDFLARE_API_TOKEN` — a token with Workers Scripts, D1, and Vectorize
-  edit permissions
-- `CLOUDFLARE_ACCOUNT_ID`
+  edit permissions ([create one here](https://dash.cloudflare.com/profile/api-tokens))
+- `CLOUDFLARE_ACCOUNT_ID` — found on the right-hand side of any page in the
+  [Cloudflare dashboard](https://dash.cloudflare.com/)
+
+Without both set, the workflow runs and fails at the deploy step (Wrangler
+refuses to authenticate non-interactively with nothing to authenticate
+with) — it does not silently no-op, so a red **Deploy ROSE Worker** run in
+the **Actions** tab means exactly this until they're added.
 
 The Worker's own runtime secrets (`OPENAI_API_KEY`, `ROSE_API_KEY`, ...) are
-set once via `wrangler secret put` as above — CI does not manage those.
+a separate thing, set once via `wrangler secret put` as above — this
+workflow only deploys code, it never touches those.
 
 ## API
 
