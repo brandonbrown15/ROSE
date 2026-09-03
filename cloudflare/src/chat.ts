@@ -7,6 +7,7 @@ import {
   embed,
   getConversationPersonId,
   getRecentMessages,
+  markSuperseded,
   recordMessage,
   setConversationPerson,
   storeMemory,
@@ -14,6 +15,7 @@ import {
 import { findOrCreatePerson, listPeople, type Person } from "./people";
 import { recall } from "./recall";
 import { webSearch } from "./search";
+import { detectSupersession, findSupersedeCandidates } from "./supersede";
 
 interface ChatRequestBody {
   conversation_id?: string;
@@ -329,6 +331,12 @@ async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promis
  * copy didn't already have, so it's dropped silently rather than stored —
  * see docs/memory.md for why that's better for recall quality too, not
  * just storage.
+ *
+ * If it's not a duplicate, also checks whether it *updates* an existing
+ * memory (supersede.ts) — a changed job, a changed address, a preference
+ * that's since changed. If so, the old memory is marked superseded rather
+ * than deleted: it stays in the database, it just stops being surfaced as
+ * current.
  */
 async function storeIfNew(
   env: Env,
@@ -342,7 +350,20 @@ async function storeIfNew(
   if (duplicateId) {
     return;
   }
-  await storeMemory(env, content, householdId, vector, source, personId);
+
+  // Does this update an existing memory rather than just add a new one
+  // (a changed job, a changed address, a preference that's since changed)?
+  // Checked before storing so the candidate search doesn't just find the
+  // new memory matching itself.
+  const candidates = await findSupersedeCandidates(env, vector, householdId, personId);
+  const stored = await storeMemory(env, content, householdId, vector, source, personId);
+
+  if (candidates.length > 0) {
+    const supersededId = await detectSupersession(env, content, candidates);
+    if (supersededId) {
+      await markSuperseded(env, supersededId, stored.id);
+    }
+  }
 }
 
 export async function handleChat(

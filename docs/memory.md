@@ -63,6 +63,34 @@ fixed constant, not tunable per-deployment. `DELETE FROM memories` (plus
 the matching `MEMORY_INDEX.deleteByIds`) is still the way to remove one
 by hand.
 
+### Supersession — updates, not overwrites
+
+A near-duplicate (above) is the *same* fact said again. This is different:
+the *same real-world thing* changing value — a job, an address, a stated
+preference that's since changed. "I now work at Globex" shouldn't erase
+"I used to work at Acme" — that's still true, just not current — but ROSE
+also shouldn't keep treating the old employer as the current one.
+
+After a memory clears the duplicate check, `storeIfNew` (`chat.ts`) looks
+for existing memories in the same scope that are semantically close enough
+to be worth checking (a lower bar than the duplicate threshold — related,
+not necessarily near-identical) via
+[`supersede.ts`](../cloudflare/src/supersede.ts). If there are any
+candidates, one more model call asks specifically: does the new fact
+*update* one of these, as opposed to merely being on a similar topic (two
+facts that can both stay true at once — "likes coffee" and "likes tea" —
+are not an update, even if topically close)? If it identifies one, that
+memory is marked `superseded_by` the new one's id — never deleted, just
+excluded from what `recall()` and `dedupe.ts` treat as current.
+
+The result: the old memory is still sitting in D1 forever (nothing about
+"I don't want it to forget" is violated), but a normal "where do you work"
+question only ever surfaces the current answer, not both. There's
+currently no way to deliberately ask ROSE about superseded history (e.g.
+"where did I used to work?") — recall never returns superseded memories at
+all, for anyone, so that specific question wouldn't have an answer today.
+Worth revisiting if that turns out to matter in practice.
+
 ### Overriding it
 
 The `/chat` request body's `remember` field lets a caller override the
@@ -195,13 +223,14 @@ asking it to print that thinking is not.
   cheaper model for distillation (it's a small classification/summarization
   task, not a conversational reply) would cut cost without hurting quality —
   a natural next step if usage grows.
-- New memories are deduplicated against existing ones before storing (see
-  [Deduplication](#deduplication) above), but memories are still never
-  automatically *forgotten* or *updated* — a stated preference that later
-  changes just becomes a second, different-enough-to-not-dedupe memory
-  sitting alongside the old one, both still surfaced by recall. `DELETE
-  FROM memories` (and the matching `MEMORY_INDEX.deleteByIds`) is the
-  manual way to remove one today; a "forget that" / "update that"
-  management endpoint is a natural next step.
+- New memories are deduplicated against existing ones, and checked for
+  whether they update (supersede) an existing one, before storing (see
+  [Deduplication](#deduplication) and [Supersession](#supersession--updates-not-overwrites)
+  above). There's still no way to explicitly ask ROSE to forget something
+  or to deliberately surface superseded history — `DELETE FROM memories`
+  (and the matching `MEMORY_INDEX.deleteByIds`) is the manual way to
+  actually remove one today; a "forget that" management endpoint, and a
+  way to ask about no-longer-current facts on purpose, are natural next
+  steps.
 - Recall currently always runs on every request. A future version could skip
   it for obviously-stateless requests to save an embedding call.
