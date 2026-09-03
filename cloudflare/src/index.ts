@@ -1,6 +1,6 @@
 import { handleChat } from "./chat";
 import { CHAT_UI_HTML } from "./chatUI";
-import { resolveHousehold } from "./households";
+import { resolveHousehold, setHouseholdPin } from "./households";
 
 export interface Env {
   DB: D1Database;
@@ -57,6 +57,32 @@ function extractBearerToken(request: Request): string | null {
   return scheme === "Bearer" && token ? token : null;
 }
 
+const PIN_PATTERN = /^\d{4,8}$/;
+
+async function handleSetPin(request: Request, env: Env, householdId: string): Promise<Response> {
+  let body: { pin?: string };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "invalid JSON body" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  if (typeof body.pin !== "string" || !PIN_PATTERN.test(body.pin)) {
+    return new Response(JSON.stringify({ error: "'pin' must be 4-8 digits" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  await setHouseholdPin(env, householdId, body.pin);
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -95,6 +121,16 @@ export default {
 
     if (url.pathname === "/chat" && request.method === "POST") {
       return withCors(await handleChat(request, env, ctx, household.id));
+    }
+
+    // Sets the household's admin PIN (chat.ts's HIGH_RISK_SERVICES gate) —
+    // deliberately a separate, non-conversational endpoint rather than
+    // something ROSE itself can do from a chat message. Letting the PIN be
+    // set or changed through the same self-reported-identity conversation
+    // path it's meant to add a check *beyond* would defeat the purpose.
+    // Gated only by the household's own bearer token, same as /chat.
+    if (url.pathname === "/admin/pin" && request.method === "POST") {
+      return withCors(await handleSetPin(request, env, household.id));
     }
 
     return withCors(
