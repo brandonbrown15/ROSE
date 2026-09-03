@@ -23,7 +23,10 @@ export async function recall(
   topK = 5
 ): Promise<RecalledMemory[]> {
   const vector = await embed(env, query);
-  const matches = await env.MEMORY_INDEX.query(vector, { topK, returnMetadata: false });
+  // "none" — a boolean here type-checks (the .d.ts still permits it for
+  // backwards compatibility) but the live API rejects `false` at runtime
+  // with a JSON-parsing error; the string enum is what it actually wants.
+  const matches = await env.MEMORY_INDEX.query(vector, { topK, returnMetadata: "none" });
 
   if (matches.matches.length === 0) {
     return [];
