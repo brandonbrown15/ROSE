@@ -37,6 +37,32 @@ If the model decides yes:
 This runs in the background after the reply is already sent (via
 `ctx.waitUntil`), so it never adds latency to the conversation.
 
+### Deduplication
+
+`distill.ts` decides fresh on every exchange whether something's worth
+remembering — it has no memory of what's already been stored, so the same
+fact mentioned again in a different conversation (a coffee preference
+brought up three separate times, say) would otherwise just pile up as
+repeat rows with nothing to show for it. Before actually storing, `chat.ts`
+(`storeIfNew`) checks whether a near-duplicate already exists in the same
+scope (same household, same person-or-household-wide attribution) via
+[`dedupe.ts`](../cloudflare/src/dedupe.ts) — the same embedding computed
+for the new memory, checked against Vectorize for a close match above a
+similarity threshold (0.93 cosine similarity currently). A match means the
+new one is silently dropped, not stored.
+
+This isn't just about storage size (which is trivial at any realistic
+scale) — it's about recall quality. `recall()` only returns a handful of
+memories per reply; three identical copies of the same fact waste slots
+that could've surfaced something else actually relevant to the question,
+without adding any information a single copy didn't already have.
+
+Still fully manual today: a duplicate that already exists from *before*
+this existed doesn't get cleaned up automatically, and the threshold is a
+fixed constant, not tunable per-deployment. `DELETE FROM memories` (plus
+the matching `MEMORY_INDEX.deleteByIds`) is still the way to remove one
+by hand.
+
 ### Overriding it
 
 The `/chat` request body's `remember` field lets a caller override the
@@ -169,9 +195,13 @@ asking it to print that thinking is not.
   cheaper model for distillation (it's a small classification/summarization
   task, not a conversational reply) would cut cost without hurting quality —
   a natural next step if usage grows.
-- Memories are never automatically forgotten, deduplicated, or updated. A
-  `DELETE FROM memories` (and the matching `MEMORY_INDEX.deleteByIds`) is the
-  manual way to remove one today; a "forget that" management endpoint/service
-  call is a natural next step.
+- New memories are deduplicated against existing ones before storing (see
+  [Deduplication](#deduplication) above), but memories are still never
+  automatically *forgotten* or *updated* — a stated preference that later
+  changes just becomes a second, different-enough-to-not-dedupe memory
+  sitting alongside the old one, both still surfaced by recall. `DELETE
+  FROM memories` (and the matching `MEMORY_INDEX.deleteByIds`) is the
+  manual way to remove one today; a "forget that" / "update that"
+  management endpoint is a natural next step.
 - Recall currently always runs on every request. A future version could skip
   it for obviously-stateless requests to save an embedding call.

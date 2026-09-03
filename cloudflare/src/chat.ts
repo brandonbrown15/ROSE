@@ -1,8 +1,10 @@
 import type { Env } from "./index";
 import { distillMemory } from "./distill";
+import { findSimilarMemory } from "./dedupe";
 import { controlDevice, listDevices } from "./homeAssistant";
 import { identifySpeaker } from "./identify";
 import {
+  embed,
   getConversationPersonId,
   getRecentMessages,
   recordMessage,
@@ -317,6 +319,32 @@ async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promis
   throw new Error("chat completion did not settle after 5 tool-call rounds");
 }
 
+/**
+ * Store a memory unless it's a near-duplicate of one that already exists
+ * in the same scope (dedupe.ts) — distillMemory decides fresh on every
+ * exchange whether something's worth remembering, with no memory of what
+ * it's already stored, so the same fact mentioned again (e.g. a coffee
+ * preference brought up in three different conversations) would otherwise
+ * just pile up as repeat rows. A duplicate carries no information a single
+ * copy didn't already have, so it's dropped silently rather than stored —
+ * see docs/memory.md for why that's better for recall quality too, not
+ * just storage.
+ */
+async function storeIfNew(
+  env: Env,
+  content: string,
+  householdId: string,
+  personId: string | null,
+  source: string
+): Promise<void> {
+  const vector = await embed(env, content);
+  const duplicateId = await findSimilarMemory(env, vector, householdId, personId);
+  if (duplicateId) {
+    return;
+  }
+  await storeMemory(env, content, householdId, vector, source, personId);
+}
+
 export async function handleChat(
   request: Request,
   env: Env,
@@ -394,17 +422,17 @@ export async function handleChat(
       const decision = await distillMemory(env, body.text, reply, resolvedPerson?.name ?? null);
       if (decision.remember && decision.memory) {
         const personId = decision.scope === "person" ? resolvedPerson?.id ?? null : null;
-        await storeMemory(env, decision.memory, householdId, conversationId, personId);
+        await storeIfNew(env, decision.memory, householdId, personId, conversationId);
       } else if (body.remember === true) {
         // Caller forced storage but nothing distilled cleanly — fall back
         // to the raw exchange rather than silently dropping it. Household-
         // wide, since we don't know it's specifically personal.
-        await storeMemory(
+        await storeIfNew(
           env,
           `User said: "${body.text}" — ROSE replied: "${reply}"`,
           householdId,
-          conversationId,
-          null
+          null,
+          conversationId
         );
       }
     })()
