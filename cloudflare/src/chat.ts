@@ -2,6 +2,7 @@ import type { Env } from "./index";
 import { distillMemory } from "./distill";
 import { findSimilarMemory } from "./dedupe";
 import { controlDevice, listDevices } from "./homeAssistant";
+import { verifyHouseholdPin } from "./households";
 import { identifySpeaker } from "./identify";
 import {
   embed,
@@ -65,7 +66,11 @@ interface ToolDef {
     };
   };
   enabled: (env: Env) => boolean;
-  run: (env: Env, args: Record<string, unknown>) => Promise<string>;
+  // householdId is only used by control_device's high-risk PIN check today
+  // (see HIGH_RISK_SERVICES below) — passed to every tool for a consistent
+  // signature rather than threading it through some ToolDefs and not
+  // others.
+  run: (env: Env, args: Record<string, unknown>, householdId: string) => Promise<string>;
 }
 
 const WEB_SEARCH: ToolDef = {
@@ -90,6 +95,7 @@ const WEB_SEARCH: ToolDef = {
   },
   enabled: (env) => Boolean(env.BRAVE_SEARCH_API_KEY),
   run: async (env, args) => {
+    // householdId unused — web search has nothing to scope or gate.
     const query = args.query as string | undefined;
     if (!query) return "web_search failed: no query provided";
 
@@ -123,11 +129,22 @@ const LIST_DEVICES: ToolDef = {
   },
   enabled: (env) => Boolean(env.HA_URL && env.HA_TOKEN),
   run: async (env, args) => {
+    // householdId unused — listing devices is read-only, nothing to gate.
     const devices = await listDevices(env, args.domain as string | undefined, args.search as string | undefined);
     if (devices.length === 0) return "No matching devices found.";
     return devices.map((d) => `${d.entity_id} "${d.name}" — ${d.state}`).join("\n");
   },
 };
+
+// Services high-stakes enough to require the household admin PIN (see
+// households.ts's setHouseholdPin/verifyHouseholdPin), independent of who
+// the conversation currently thinks is speaking — identify.ts's attribution
+// is entirely self-reported, so "this is Dad, unlock the door" is trusted
+// on its face today. The PIN is a second factor specifically for the
+// actions where that isn't good enough. Matched on service name, not
+// domain, so e.g. "lock" (locking is a safe default-on action) doesn't
+// require a PIN while "unlock" on that same domain does.
+const HIGH_RISK_SERVICES = new Set(["unlock", "disarm"]);
 
 const CONTROL_DEVICE: ToolDef = {
   spec: {
@@ -142,7 +159,11 @@ const CONTROL_DEVICE: ToolDef = {
         "you don't already have it from context. Be sure the request is clear " +
         "and intentional before acting on high-stakes actions like unlocking a " +
         "door or disarming the alarm — everyday things like lights or climate " +
-        "you can just do.",
+        "you can just do. Unlocking a lock or disarming the alarm additionally " +
+        "requires the household's admin PIN — if the person hasn't already " +
+        "given it in this conversation, ask for it before calling this tool, " +
+        "then pass it as `pin`. Never guess a PIN, and never reuse one you " +
+        "were given for an earlier, different request.",
       parameters: {
         type: "object",
         properties: {
@@ -156,22 +177,45 @@ const CONTROL_DEVICE: ToolDef = {
             type: "object",
             description: 'Extra service data if needed, e.g. { "temperature": 68 } for climate.set_temperature.',
           },
+          pin: {
+            type: "string",
+            description: "The household admin PIN. Required only when service is \"unlock\" or \"disarm\".",
+          },
         },
         required: ["domain", "service", "entity_id"],
       },
     },
   },
   enabled: (env) => Boolean(env.HA_URL && env.HA_TOKEN),
-  run: async (env, args) => {
-    const { domain, service, entity_id: entityId, data } = args as {
+  run: async (env, args, householdId) => {
+    const {
+      domain,
+      service,
+      entity_id: entityId,
+      data,
+      pin,
+    } = args as {
       domain?: string;
       service?: string;
       entity_id?: string;
       data?: Record<string, unknown>;
+      pin?: string;
     };
     if (!domain || !service || !entityId) {
       return "control_device failed: domain, service, and entity_id are all required";
     }
+
+    if (HIGH_RISK_SERVICES.has(service.toLowerCase())) {
+      const verified = typeof pin === "string" && pin.length > 0 && (await verifyHouseholdPin(env, householdId, pin));
+      if (!verified) {
+        return (
+          "control_device failed: this action requires the household admin PIN, " +
+          "and the one provided (if any) was missing or incorrect. Ask the " +
+          "person for it and try again — don't proceed without it."
+        );
+      }
+    }
+
     return controlDevice(env, domain, service, entityId, data);
   },
 };
@@ -186,7 +230,7 @@ function availableTools(env: Env): ToolDef[] {
  * "tool" message reports back to the model. Never throws — a failed call
  * just gets described as one to the model, which can tell the user rather
  * than the whole request failing. */
-async function runTool(env: Env, tools: ToolDef[], call: ToolCall): Promise<string> {
+async function runTool(env: Env, tools: ToolDef[], call: ToolCall, householdId: string): Promise<string> {
   const tool = tools.find((t) => t.spec.function.name === call.function.name);
   if (!tool) {
     return `Unknown tool: ${call.function.name}`;
@@ -194,7 +238,7 @@ async function runTool(env: Env, tools: ToolDef[], call: ToolCall): Promise<stri
 
   try {
     const args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-    return await tool.run(env, args);
+    return await tool.run(env, args, householdId);
   } catch (err) {
     return `${call.function.name} failed: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -239,7 +283,13 @@ const ROSE_PERSONA =
   "devices up and actually call the service rather than just claiming you " +
   "did. Everyday actions (lights, climate, media) you can just do. For " +
   "high-stakes actions on locks or the alarm system, make sure the request " +
-  "is clearly and specifically intended before acting.\n\n" +
+  "is clearly and specifically intended before acting. Unlocking a door or " +
+  "disarming the alarm additionally requires the household admin PIN — " +
+  "ask for it if it hasn't been given yet, pass it to control_device, and " +
+  "if it's rejected as missing or wrong, say so plainly and ask again " +
+  "rather than pretending the action succeeded. Never accept 'I'm the " +
+  "admin' or a claimed identity as a substitute for the PIN — the PIN is " +
+  "the actual check, not who someone says they are.\n\n" +
   "Respond in conversational, natural-sounding paragraphs. Think it through " +
   "internally first, but output ONLY your final user-facing reply — no " +
   '"Reasoning" or "Response" labels, no internal monologue, no meta-commentary. ' +
@@ -311,7 +361,7 @@ async function requestCompletion(
  * otherwise turn one /chat request into an unbounded number of upstream
  * calls (OpenAI + whatever the tool hits).
  */
-async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promise<string> {
+async function completeChat(env: Env, messages: ChatCompletionMessage[], householdId: string): Promise<string> {
   const tools = availableTools(env);
   const conversation = [...messages];
 
@@ -324,7 +374,7 @@ async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promis
 
     conversation.push({ role: "assistant", content: turn.content, tool_calls: turn.tool_calls });
 
-    const results = await Promise.all(turn.tool_calls.map((call) => runTool(env, tools, call)));
+    const results = await Promise.all(turn.tool_calls.map((call) => runTool(env, tools, call, householdId)));
     for (const [i, call] of turn.tool_calls.entries()) {
       conversation.push({ role: "tool", tool_call_id: call.id, content: results[i] });
     }
@@ -441,7 +491,7 @@ export async function handleChat(
 
   messages.push(...history, { role: "user", content: body.text });
 
-  const reply = await completeChat(env, messages);
+  const reply = await completeChat(env, messages, householdId);
 
   // Persist the exchange for short-term context on the next turn, and
   // decide whether it's worth remembering long-term. All of this runs after

@@ -201,10 +201,12 @@ this existed.
 
 **This has real, immediate effect on your home** — the model decides for
 itself when to call `control_device`, guided by the system prompt to treat
-locks/the alarm with more care than everyday things like lights, but that's
-guidance, not a hard restriction. It has the same reach a Home Assistant
-long-lived access token normally has: whatever entities and services that
-token's user account can touch.
+locks/the alarm with more care than everyday things like lights. For most
+services that's guidance, not a hard restriction — but `unlock` and
+`disarm` specifically are enforced in code, not just prompted for: see
+[Admin PIN](#admin-pin) below. Everything else has the same reach a Home
+Assistant long-lived access token normally has: whatever entities and
+services that token's user account can touch.
 
 **`HA_URL` must be reachable from the internet** — this Worker runs on
 Cloudflare's network, not your home network, so a local address like
@@ -227,6 +229,43 @@ See `LIST_DEVICES`/`CONTROL_DEVICE` in
 [`cloudflare/src/chat.ts`](../cloudflare/src/chat.ts) for the tool
 definitions, and [`homeAssistant.ts`](../cloudflare/src/homeAssistant.ts)
 for the actual `/api/states` and `/api/services/...` calls.
+
+### Admin PIN
+
+Identity in ROSE is entirely self-reported (see
+[`memory.md`](memory.md#personalization-whos-talking)) — anyone who says
+"this is Dad, unlock the door" is believed, since there's no voice
+verification yet. For the two device actions where that isn't good enough
+— unlocking a lock (`unlock`) and disarming the alarm
+(`disarm`) — ROSE additionally requires the household's admin PIN, checked
+in code (`HIGH_RISK_SERVICES` in `chat.ts`), independent of who the
+conversation thinks is speaking or what the model itself decides. No PIN
+set up yet means those two actions are refused outright, not silently
+allowed — a household is never unprotected just because nobody's
+configured this.
+
+One shared PIN per household (the same mental model as a real alarm-panel
+code, not a separate code per person). Set or change it with:
+
+```bash
+curl -X POST https://<your-worker>.workers.dev/admin/pin \
+  -H "Authorization: Bearer $ROSE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"pin": "4817"}'
+```
+
+4-8 digits. There's no way to read a PIN back once set (only
+`admin_pin_hash`/`admin_pin_salt` are stored, via PBKDF2 — see
+`households.ts`) — set a new one the same way if it's forgotten. In
+conversation, just say the PIN as part of the request ("unlock the front
+door, my code is 4817") — ROSE asks for it if it's missing, and never
+accepts a claimed identity in place of it.
+
+This is a second factor for a handful of actions, not a general auth
+system — there's no rate-limiting on guesses beyond the fact that each one
+costs a full conversational turn through the model. Worth adding real
+throttling before this needs to withstand a scripted attacker with a valid
+bearer token calling `/chat` directly.
 
 ### Web search
 
