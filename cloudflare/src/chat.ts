@@ -315,7 +315,8 @@ async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promis
 export async function handleChat(
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
+  householdId: string
 ): Promise<Response> {
   let body: ChatRequestBody;
   try {
@@ -337,9 +338,9 @@ export async function handleChat(
   const conversationId = body.conversation_id ?? crypto.randomUUID();
 
   const [history, people, existingPersonId] = await Promise.all([
-    getRecentMessages(env, conversationId),
-    listPeople(env),
-    getConversationPersonId(env, conversationId),
+    getRecentMessages(env, conversationId, householdId),
+    listPeople(env, householdId),
+    getConversationPersonId(env, conversationId, householdId),
   ]);
 
   const existingPerson = people.find((p) => p.id === existingPersonId) ?? null;
@@ -351,10 +352,10 @@ export async function handleChat(
   const identified = await identifySpeaker(env, body.text, people, existingPerson?.name ?? null);
   let resolvedPerson: Person | null = existingPerson;
   if (identified.name) {
-    resolvedPerson = await findOrCreatePerson(env, identified.name);
+    resolvedPerson = await findOrCreatePerson(env, householdId, identified.name);
   }
 
-  const memories = await recall(env, body.text, resolvedPerson?.id ?? null);
+  const memories = await recall(env, body.text, resolvedPerson?.id ?? null, householdId);
 
   const messages: ChatCompletionMessage[] = [
     { role: "system", content: buildSystemPrompt(resolvedPerson?.name ?? null) },
@@ -374,11 +375,11 @@ export async function handleChat(
   // the response is composed so it never adds latency to the reply.
   ctx.waitUntil(
     (async () => {
-      await recordMessage(env, conversationId, "user", body.text);
-      await recordMessage(env, conversationId, "assistant", reply);
+      await recordMessage(env, conversationId, householdId, "user", body.text);
+      await recordMessage(env, conversationId, householdId, "assistant", reply);
 
       if (resolvedPerson && resolvedPerson.id !== existingPersonId) {
-        await setConversationPerson(env, conversationId, resolvedPerson.id);
+        await setConversationPerson(env, conversationId, householdId, resolvedPerson.id);
       }
 
       if (body.remember === false) {
@@ -388,12 +389,18 @@ export async function handleChat(
       const decision = await distillMemory(env, body.text, reply, resolvedPerson?.name ?? null);
       if (decision.remember && decision.memory) {
         const personId = decision.scope === "person" ? resolvedPerson?.id ?? null : null;
-        await storeMemory(env, decision.memory, conversationId, personId);
+        await storeMemory(env, decision.memory, householdId, conversationId, personId);
       } else if (body.remember === true) {
         // Caller forced storage but nothing distilled cleanly — fall back
         // to the raw exchange rather than silently dropping it. Household-
         // wide, since we don't know it's specifically personal.
-        await storeMemory(env, `User said: "${body.text}" — ROSE replied: "${reply}"`, conversationId, null);
+        await storeMemory(
+          env,
+          `User said: "${body.text}" — ROSE replied: "${reply}"`,
+          householdId,
+          conversationId,
+          null
+        );
       }
     })()
   );

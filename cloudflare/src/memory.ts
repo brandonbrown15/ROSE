@@ -26,22 +26,27 @@ export async function embed(env: Env, text: string): Promise<number[]> {
 }
 
 /**
- * Ensure a conversation row exists, then append a message to it.
+ * Ensure a conversation row exists, then append a message to it. Both are
+ * tagged with `householdId` — see docs/households.md — so a conversation_id
+ * collision across two households (practically impossible; ids are random
+ * UUIDs) still can't leak one household's messages into another's reads,
+ * since every read below filters by household_id too.
  */
 export async function recordMessage(
   env: Env,
   conversationId: string,
+  householdId: string,
   role: "system" | "user" | "assistant",
   content: string
 ): Promise<void> {
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO conversations (id) VALUES (?1)
+      `INSERT INTO conversations (id, household_id) VALUES (?1, ?2)
        ON CONFLICT(id) DO UPDATE SET updated_at = datetime('now')`
-    ).bind(conversationId),
+    ).bind(conversationId, householdId),
     env.DB.prepare(
-      `INSERT INTO messages (conversation_id, role, content) VALUES (?1, ?2, ?3)`
-    ).bind(conversationId, role, content),
+      `INSERT INTO messages (conversation_id, household_id, role, content) VALUES (?1, ?2, ?3, ?4)`
+    ).bind(conversationId, householdId, role, content),
   ]);
 }
 
@@ -52,15 +57,16 @@ export async function recordMessage(
 export async function getRecentMessages(
   env: Env,
   conversationId: string,
+  householdId: string,
   limit = 20
 ): Promise<{ role: "system" | "user" | "assistant"; content: string }[]> {
   const { results } = await env.DB.prepare(
     `SELECT role, content FROM messages
-     WHERE conversation_id = ?1
+     WHERE conversation_id = ?1 AND household_id = ?2
      ORDER BY created_at DESC, id DESC
-     LIMIT ?2`
+     LIMIT ?3`
   )
-    .bind(conversationId, limit)
+    .bind(conversationId, householdId, limit)
     .all<{ role: "system" | "user" | "assistant"; content: string }>();
 
   return results.reverse();
@@ -69,12 +75,14 @@ export async function getRecentMessages(
 /**
  * Persist a durable memory: store the text in D1 and its embedding in
  * Vectorize, linked by id. `personId` attributes it to a specific household
- * member (see people.ts); omitted or null means a household-wide fact,
- * visible regardless of who's asking.
+ * member (see people.ts); omitted or null means a fact for everyone in that
+ * household, visible regardless of who's asking (but never to a *different*
+ * household — see recall.ts).
  */
 export async function storeMemory(
   env: Env,
   content: string,
+  householdId: string,
   source?: string,
   personId?: string | null
 ): Promise<Memory> {
@@ -82,8 +90,10 @@ export async function storeMemory(
   const vector = await embed(env, content);
 
   await Promise.all([
-    env.DB.prepare(`INSERT INTO memories (id, content, source, person_id) VALUES (?1, ?2, ?3, ?4)`)
-      .bind(id, content, source ?? null, personId ?? null)
+    env.DB.prepare(
+      `INSERT INTO memories (id, content, source, person_id, household_id) VALUES (?1, ?2, ?3, ?4, ?5)`
+    )
+      .bind(id, content, source ?? null, personId ?? null, householdId)
       .run(),
     env.MEMORY_INDEX.insert([{ id, values: vector, metadata: { source: source ?? "" } }]),
   ]);
@@ -92,9 +102,13 @@ export async function storeMemory(
 }
 
 /** The person a conversation is currently attributed to, if any. */
-export async function getConversationPersonId(env: Env, conversationId: string): Promise<string | null> {
-  const row = await env.DB.prepare(`SELECT person_id FROM conversations WHERE id = ?1`)
-    .bind(conversationId)
+export async function getConversationPersonId(
+  env: Env,
+  conversationId: string,
+  householdId: string
+): Promise<string | null> {
+  const row = await env.DB.prepare(`SELECT person_id FROM conversations WHERE id = ?1 AND household_id = ?2`)
+    .bind(conversationId, householdId)
     .first<{ person_id: string | null }>();
   return row?.person_id ?? null;
 }
@@ -104,12 +118,13 @@ export async function getConversationPersonId(env: Env, conversationId: string):
 export async function setConversationPerson(
   env: Env,
   conversationId: string,
+  householdId: string,
   personId: string
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO conversations (id, person_id) VALUES (?1, ?2)
-     ON CONFLICT(id) DO UPDATE SET person_id = ?2, updated_at = datetime('now')`
+    `INSERT INTO conversations (id, household_id, person_id) VALUES (?1, ?2, ?3)
+     ON CONFLICT(id) DO UPDATE SET person_id = ?3, updated_at = datetime('now')`
   )
-    .bind(conversationId, personId)
+    .bind(conversationId, householdId, personId)
     .run();
 }

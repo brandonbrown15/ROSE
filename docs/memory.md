@@ -1,6 +1,10 @@
 # Memory
 
-ROSE keeps two distinct kinds of memory.
+ROSE keeps two distinct kinds of memory. Everything here is additionally
+scoped to *which* household is asking — see [`households.md`](households.md)
+for that layer; this doc otherwise talks about "household-wide" the way it
+always has, meaning "not attributed to one specific person" within
+whichever household the request belongs to.
 
 ## Short-term: conversation history
 
@@ -106,16 +110,20 @@ On every `/chat` request, `recall.ts` embeds the incoming text and queries
 Vectorize for the closest stored memories. The matching memory text is
 resolved back out of D1 and injected into the system prompt as
 `RELEVANT MEMORIES`, so the model can use it without it having been part of
-this conversation's own history.
+this conversation's own history. The D1 lookup also filters to the
+requesting household's own rows — see
+[`households.md`](households.md#what-this-deliberately-doesnt-do-yet) for
+why that filter happens in D1 rather than in the Vectorize query itself.
 
 ```
 new message
     │
-    ├──▶ embed(text) ──▶ Vectorize.query() ──▶ top-K memory ids
+    ├──▶ embed(text) ──▶ Vectorize.query() ──▶ wide candidate pool of ids
     │                                              │
     │                                              ▼
     │                                    D1: SELECT content
-    │                                    FROM memories WHERE id IN (...)
+    │                                    FROM memories WHERE household_id = ?
+    │                                    AND id IN (...) — take top-K of these
     │                                              │
     ▼                                              ▼
 short-term history  +  RELEVANT MEMORIES  ──▶  chat completion
