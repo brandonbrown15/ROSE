@@ -5,6 +5,11 @@ export interface RecalledMemory {
   id: string;
   content: string;
   score: number;
+  /** false if this memory has been superseded (supersede.ts) — still
+   * genuinely true of the past, just not the current state. chat.ts labels
+   * these when building RELEVANT MEMORIES so the model never mistakes a
+   * retired fact for a current one. */
+  current: boolean;
 }
 
 /**
@@ -30,10 +35,16 @@ export interface RecalledMemory {
  * Pass null when no speaker is currently identified, which surfaces
  * household-wide memories only.
  *
- * Superseded memories (see supersede.ts) are excluded — recall only ever
- * surfaces what's *current*. A superseded memory isn't deleted, it just
- * stops showing up here; ROSE won't see a stale "works at Acme" alongside
- * a newer "works at Globex," only the current one.
+ * Superseded memories (see supersede.ts) are still eligible to come back —
+ * a retired fact ("used to work at Acme") is genuinely relevant to plenty
+ * of questions ("help me apply for this job" should draw on past *and*
+ * current experience), so excluding it outright would make recall worse,
+ * not more correct. What changes is the `current` flag on each result:
+ * chat.ts labels non-current ones in RELEVANT MEMORIES, so the model
+ * always knows which is the live fact and which is history, and ranking
+ * is unaffected either way — a superseded memory only shows up when it's
+ * actually one of the closest semantic matches to the query, same as any
+ * other memory.
  */
 export async function recall(
   env: Env,
@@ -56,11 +67,11 @@ export async function recall(
   const ids = matches.matches.map((m) => m.id);
   const placeholders = ids.map((_, i) => `?${i + 2}`).join(", ");
   const { results } = await env.DB.prepare(
-    `SELECT id, content, person_id FROM memories
-     WHERE household_id = ?1 AND superseded_by IS NULL AND id IN (${placeholders})`
+    `SELECT id, content, person_id, superseded_by FROM memories
+     WHERE household_id = ?1 AND id IN (${placeholders})`
   )
     .bind(householdId, ...ids)
-    .all<{ id: string; content: string; person_id: string | null }>();
+    .all<{ id: string; content: string; person_id: string | null; superseded_by: string | null }>();
 
   const rowById = new Map(results.map((r) => [r.id, r]));
 
@@ -70,5 +81,8 @@ export async function recall(
       return row !== undefined && (row.person_id === null || row.person_id === personId);
     })
     .slice(0, topK)
-    .map((m) => ({ id: m.id, content: rowById.get(m.id)!.content, score: m.score }));
+    .map((m) => {
+      const row = rowById.get(m.id)!;
+      return { id: m.id, content: row.content, score: m.score, current: row.superseded_by === null };
+    });
 }

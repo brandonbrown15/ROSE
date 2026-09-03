@@ -84,12 +84,19 @@ memory is marked `superseded_by` the new one's id — never deleted, just
 excluded from what `recall()` and `dedupe.ts` treat as current.
 
 The result: the old memory is still sitting in D1 forever (nothing about
-"I don't want it to forget" is violated), but a normal "where do you work"
-question only ever surfaces the current answer, not both. There's
-currently no way to deliberately ask ROSE about superseded history (e.g.
-"where did I used to work?") — recall never returns superseded memories at
-all, for anyone, so that specific question wouldn't have an answer today.
-Worth revisiting if that turns out to matter in practice.
+"I don't want it to forget" is violated), and a normal "where do you work"
+question only ever surfaces the current answer as current — but a
+superseded memory isn't hidden from recall altogether. `recall()` ranks
+purely by relevance to the question asked, current or not, and returns a
+`current: boolean` flag on every result; `chat.ts` labels the non-current
+ones (`[no longer current — history]`) when building RELEVANT MEMORIES, and
+the persona prompt tells the model to treat a labeled memory as past, not
+present, while still drawing on it when the question genuinely wants both
+("help me apply for this job" pulls in current *and* prior experience —
+"where did I used to work?" surfaces the old employer, correctly framed as
+history). Superseded facts only ever show up when they're actually one of
+the closest semantic matches to the question — the same relevance bar as
+any other memory, nothing special about being retired.
 
 ### Overriding it
 
@@ -226,11 +233,9 @@ asking it to print that thinking is not.
 - New memories are deduplicated against existing ones, and checked for
   whether they update (supersede) an existing one, before storing (see
   [Deduplication](#deduplication) and [Supersession](#supersession--updates-not-overwrites)
-  above). There's still no way to explicitly ask ROSE to forget something
-  or to deliberately surface superseded history — `DELETE FROM memories`
-  (and the matching `MEMORY_INDEX.deleteByIds`) is the manual way to
-  actually remove one today; a "forget that" management endpoint, and a
-  way to ask about no-longer-current facts on purpose, are natural next
-  steps.
+  above). There's still no way to explicitly ask ROSE to forget something —
+  `DELETE FROM memories` (and the matching `MEMORY_INDEX.deleteByIds`) is
+  the manual way to actually remove one today; a "forget that" management
+  endpoint is a natural next step.
 - Recall currently always runs on every request. A future version could skip
   it for obviously-stateless requests to save an embedding call.
