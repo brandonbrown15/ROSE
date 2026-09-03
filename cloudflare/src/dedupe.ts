@@ -20,6 +20,8 @@ const SIMILARITY_THRESHOLD = 0.93;
  * this person" filter: two people in the same household each having their
  * own "takes coffee black" memory aren't duplicates of each other, so this
  * only matches an *exact* person_id match (both null, or the same person).
+ * Excludes already-superseded memories (supersede.ts) too — nothing should
+ * be treated as a restatement of a fact that's already been retired.
  */
 export async function findSimilarMemory(
   env: Env,
@@ -38,7 +40,8 @@ export async function findSimilarMemory(
   const ids = matches.matches.map((m) => m.id);
   const placeholders = ids.map((_, i) => `?${i + 2}`).join(", ");
   const { results } = await env.DB.prepare(
-    `SELECT id, person_id FROM memories WHERE household_id = ?1 AND id IN (${placeholders})`
+    `SELECT id, person_id FROM memories
+     WHERE household_id = ?1 AND superseded_by IS NULL AND id IN (${placeholders})`
   )
     .bind(householdId, ...ids)
     .all<{ id: string; person_id: string | null }>();

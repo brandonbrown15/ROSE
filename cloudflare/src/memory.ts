@@ -106,6 +106,19 @@ export async function storeMemory(
   return { id, content, source, createdAt: new Date().toISOString() };
 }
 
+/**
+ * Mark an existing memory as superseded by a newer one — see supersede.ts
+ * for how that's decided. The old memory is never deleted (so "I used to
+ * work at Acme" stays permanently true and knowable); this just stops it
+ * from being treated as current — recall.ts and dedupe.ts both exclude
+ * superseded memories from their normal matching.
+ */
+export async function markSuperseded(env: Env, oldMemoryId: string, newMemoryId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE memories SET superseded_by = ?1 WHERE id = ?2`)
+    .bind(newMemoryId, oldMemoryId)
+    .run();
+}
+
 /** The person a conversation is currently attributed to, if any. */
 export async function getConversationPersonId(
   env: Env,

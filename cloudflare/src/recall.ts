@@ -29,6 +29,11 @@ export interface RecalledMemory {
  * person — household-wide memories (no person_id) always pass through.
  * Pass null when no speaker is currently identified, which surfaces
  * household-wide memories only.
+ *
+ * Superseded memories (see supersede.ts) are excluded — recall only ever
+ * surfaces what's *current*. A superseded memory isn't deleted, it just
+ * stops showing up here; ROSE won't see a stale "works at Acme" alongside
+ * a newer "works at Globex," only the current one.
  */
 export async function recall(
   env: Env,
@@ -51,7 +56,8 @@ export async function recall(
   const ids = matches.matches.map((m) => m.id);
   const placeholders = ids.map((_, i) => `?${i + 2}`).join(", ");
   const { results } = await env.DB.prepare(
-    `SELECT id, content, person_id FROM memories WHERE household_id = ?1 AND id IN (${placeholders})`
+    `SELECT id, content, person_id FROM memories
+     WHERE household_id = ?1 AND superseded_by IS NULL AND id IN (${placeholders})`
   )
     .bind(householdId, ...ids)
     .all<{ id: string; content: string; person_id: string | null }>();
