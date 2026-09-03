@@ -113,17 +113,16 @@ The Worker's own runtime secrets (`OPENAI_API_KEY`, `ROSE_API_KEY`, ...) are
 a separate thing, set once via `wrangler secret put` as above — this
 workflow only deploys code, it never touches those.
 
-### If you commercialize this later
+### Selling this to other people
 
-Right now everything — one D1 database, one Vectorize index, one set of
-secrets — is scoped to a single household (yours). The variable/secret
-split above keeps your personal database id out of git history, but
-selling this to other people is still a bigger step than that alone:
-each customer needs their own D1 database, Vectorize index, and Worker (or
-some real multi-tenant redesign of the D1 schema), plus a way to onboard
-someone without you personally running these setup steps for them. Not
-needed today — just worth remembering this repo's current shape is
-"one deployment," not "a product," when that day comes.
+ROSE now supports multiple households (customers) on this one Worker, D1
+database, and Vectorize index — no separate Cloudflare deployment needed
+per customer. Everything above (the secrets, the variable, the deploy
+workflow) still only applies once, to this one shared backend; adding a
+customer after that is a one-off command, not another round of Cloudflare
+setup. See [`households.md`](households.md) for how households work, how
+to add one, and what's deliberately not built yet (self-serve signup,
+billing, an admin UI).
 
 ## API
 

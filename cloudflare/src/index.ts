@@ -1,5 +1,6 @@
 import { handleChat } from "./chat";
 import { CHAT_UI_HTML } from "./chatUI";
+import { resolveHousehold } from "./households";
 
 export interface Env {
   DB: D1Database;
@@ -7,6 +8,11 @@ export interface Env {
 
   // Secrets — set with `wrangler secret put <NAME>`, never in wrangler.jsonc.
   OPENAI_API_KEY: string;
+  // The bootstrap/default household's bearer token — see households.ts.
+  // Every household added after multi-tenancy (docs/households.md)
+  // authenticates via its own row in D1 instead; this one secret only
+  // covers the single 'default' household migration 0003 backfilled
+  // existing data into.
   ROSE_API_KEY: string;
   HA_URL?: string;
   HA_TOKEN?: string;
@@ -20,9 +26,9 @@ export interface Env {
 }
 
 // Permissive CORS: this API is protected by its own bearer-token check
-// (isAuthorized below), not by same-origin/cookie assumptions, so allowing
-// any origin doesn't weaken that — it just lets a browser-based client
-// (e.g. a standalone chat page) call this API directly, which the
+// (resolveHousehold below), not by same-origin/cookie assumptions, so
+// allowing any origin doesn't weaken that — it just lets a browser-based
+// client (e.g. a standalone chat page) call this API directly, which the
 // Cloudflare Workers runtime doesn't allow by default.
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
@@ -45,10 +51,10 @@ function unauthorized(): Response {
   });
 }
 
-function isAuthorized(request: Request, env: Env): boolean {
+function extractBearerToken(request: Request): string | null {
   const auth = request.headers.get("authorization") ?? "";
   const [scheme, token] = auth.split(" ");
-  return scheme === "Bearer" && token === env.ROSE_API_KEY;
+  return scheme === "Bearer" && token ? token : null;
 }
 
 export default {
@@ -81,12 +87,14 @@ export default {
       );
     }
 
-    if (!isAuthorized(request, env)) {
+    const token = extractBearerToken(request);
+    const household = token ? await resolveHousehold(env, token) : null;
+    if (!household) {
       return withCors(unauthorized());
     }
 
     if (url.pathname === "/chat" && request.method === "POST") {
-      return withCors(await handleChat(request, env, ctx));
+      return withCors(await handleChat(request, env, ctx, household.id));
     }
 
     return withCors(
