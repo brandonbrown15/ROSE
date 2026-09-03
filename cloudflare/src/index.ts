@@ -1,4 +1,5 @@
 import { handleChat } from "./chat";
+import { CHAT_UI_HTML } from "./chatUI";
 
 export interface Env {
   DB: D1Database;
@@ -55,6 +56,16 @@ export default {
     // "preflight") to ask permission — no auth, no body, just headers.
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+
+    // Unauthenticated demo chat page — just markup, the API key the page
+    // asks for is only ever used client-side to call /chat directly, which
+    // still enforces the real auth check below. Lets ROSE be demoed from
+    // any browser (e.g. a phone) by opening this Worker's own URL.
+    if (url.pathname === "/" && request.method === "GET") {
+      return new Response(CHAT_UI_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
     }
 
     // Unauthenticated health check, useful for the HA config flow's

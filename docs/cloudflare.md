@@ -79,6 +79,16 @@ set once via `wrangler secret put` as above — CI does not manage those.
 
 ## API
 
+### `GET /`
+
+Unauthenticated. Serves a small standalone chat page (embedded in the
+Worker, no separate hosting needed) so you can demo ROSE from any browser —
+open the Worker's own URL on a phone, tablet, or laptop, paste in your
+`ROSE_API_KEY` when prompted, and start chatting. Useful for showing ROSE
+to someone without Home Assistant running. The key is stored only in that
+browser's `localStorage` and used solely to call `/chat` directly from the
+page — it never touches anything but this Worker.
+
 ### `GET /health`
 
 Unauthenticated. Returns `{"status": "ok"}`. Used by the Home Assistant
