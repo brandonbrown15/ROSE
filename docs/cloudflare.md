@@ -68,11 +68,13 @@ npm run deploy
 
 ### GitHub Actions deploys
 
-This is what lets updates ship without anyone running `wrangler deploy` from
-a local checkout — merge to `main`, GitHub deploys it. `.github/workflows/deploy.yml`
-runs `wrangler deploy` on every push to `main` that touches `cloudflare/`
-(or the workflow file itself), and can also be triggered by hand from the
-**Actions** tab (`workflow_dispatch`) without a code change at all.
+This is what lets updates ship without anyone running commands from a local
+checkout — merge to `main`, GitHub applies any pending D1 migrations and
+deploys the Worker. `.github/workflows/deploy.yml` runs on every push to
+`main` that touches `cloudflare/` (or the workflow file itself), and can
+also be triggered by hand from the **Actions** tab (`workflow_dispatch`)
+without a code change at all — the button to reach for a security fix or a
+performance change with nothing else queued up.
 
 It needs two repository **secrets**, added once via
 **Settings → Secrets and variables → Actions → Secrets tab → New repository secret**
@@ -109,9 +111,24 @@ file itself never changes. A database id isn't a secret on its own (it's a
 pointer, not a credential — nobody can reach your data with just the id),
 which is why it's a plain variable rather than an encrypted one.
 
-The Worker's own runtime secrets (`OPENAI_API_KEY`, `ROSE_API_KEY`, ...) are
-a separate thing, set once via `wrangler secret put` as above — this
-workflow only deploys code, it never touches those.
+### What's remote now, and what still isn't
+
+- **Code changes** — fully remote: merge to `main`, or run the workflow by
+  hand. Nothing local required.
+- **Schema changes** (a new migration file) — fully remote as of the "Run
+  D1 migrations" step above: it runs on every deploy and safely no-ops if
+  there's nothing new to apply (Wrangler tracks what's already run against
+  the live database).
+- **The Worker's own runtime secrets** (`OPENAI_API_KEY`, `ROSE_API_KEY`,
+  `HA_TOKEN`, `BRAVE_SEARCH_API_KEY`) — still local-only, via
+  `wrangler secret put` as above. This workflow never touches them. If you
+  want rotating one of these to *also* not require a local checkout (e.g.
+  responding to a leaked key from your phone), that's a separate, doable
+  addition — add each as a GitHub secret too and a workflow step that pipes
+  it into `wrangler secret put` on deploy — but it means the value then
+  lives in two encrypted stores instead of one, which is a real tradeoff
+  worth deciding on purpose rather than defaulting into. Not done here;
+  ask if you want it.
 
 ### Selling this to other people
 
