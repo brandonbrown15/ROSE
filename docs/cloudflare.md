@@ -127,6 +127,45 @@ it doesn't reflect whether this exchange itself got remembered (that
 decision happens after the reply, in the background). See
 [`memory.md`](memory.md) for the full flow.
 
+### Home Assistant device control
+
+When both `HA_URL` and `HA_TOKEN` are set, ROSE gets two tools it can call
+mid-answer: `list_devices` (look up entities and their current state) and
+`control_device` (actually call a Home Assistant service — turn lights on/
+off, lock/unlock, arm/disarm the alarm, set a thermostat, play media, run a
+scene, anything HA's own service-call mechanism supports). Without both set,
+neither tool is offered and ROSE stays conversation-only, same as before
+this existed.
+
+**This has real, immediate effect on your home** — the model decides for
+itself when to call `control_device`, guided by the system prompt to treat
+locks/the alarm with more care than everyday things like lights, but that's
+guidance, not a hard restriction. It has the same reach a Home Assistant
+long-lived access token normally has: whatever entities and services that
+token's user account can touch.
+
+**`HA_URL` must be reachable from the internet** — this Worker runs on
+Cloudflare's network, not your home network, so a local address like
+`http://homeassistant.local:8123` won't work. Use your instance's
+[Nabu Casa Remote UI](https://www.nabucasa.com/) URL, a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+pointed at it, or your own reverse proxy with HTTPS — whichever you
+already use (or set up) to reach your instance from outside your LAN.
+
+To turn it on:
+
+1. In Home Assistant: **Profile → Security → Long-lived access tokens →
+   Create token**. Copy it — HA only shows it once.
+2. `npx wrangler secret put HA_URL` — your instance's public URL, no
+   trailing slash.
+3. `npx wrangler secret put HA_TOKEN` — paste the token from step 1.
+4. Redeploy (`npm run deploy`).
+
+See `LIST_DEVICES`/`CONTROL_DEVICE` in
+[`cloudflare/src/chat.ts`](../cloudflare/src/chat.ts) for the tool
+definitions, and [`homeAssistant.ts`](../cloudflare/src/homeAssistant.ts)
+for the actual `/api/states` and `/api/services/...` calls.
+
 ### Web search
 
 ROSE can look things up on the open web — news, current events, anything

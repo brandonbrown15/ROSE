@@ -1,5 +1,6 @@
 import type { Env } from "./index";
 import { distillMemory } from "./distill";
+import { controlDevice, listDevices } from "./homeAssistant";
 import { identifySpeaker } from "./identify";
 import {
   getConversationPersonId,
@@ -44,57 +45,154 @@ interface ChatCompletionMessage {
   tool_call_id?: string;
 }
 
-// Tool definitions handed to the model, and the handlers that actually run
-// them. Only offered when the backing service is configured — see
-// `availableTools` below — so ROSE degrades to answering from what it
-// already knows when e.g. BRAVE_SEARCH_API_KEY isn't set, rather than
-// offering a tool that would just fail.
-const WEB_SEARCH_TOOL = {
-  type: "function",
-  function: {
-    name: "web_search",
-    description:
-      "Search the web for current, real-time, or otherwise unfamiliar information " +
-      "— news, current events, sports scores, prices, or anything that could have " +
-      "changed since training. Returns a short list of results (title, URL, " +
-      "snippet). Only use this when the answer genuinely depends on up-to-date or " +
-      "unknown information — not for things you already know.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "The search query." },
+// Tool definitions handed to the model, each paired with `enabled` (whether
+// the backing service is configured) and `run` (what actually executing it
+// does). Only enabled tools are sent to the API at all — see
+// `availableTools` below — so ROSE degrades gracefully to whatever's
+// actually configured (e.g. no Home Assistant, or no search key) rather
+// than offering a tool that would just fail every time.
+interface ToolDef {
+  spec: {
+    type: "function";
+    function: {
+      name: string;
+      description: string;
+      parameters: Record<string, unknown>;
+    };
+  };
+  enabled: (env: Env) => boolean;
+  run: (env: Env, args: Record<string, unknown>) => Promise<string>;
+}
+
+const WEB_SEARCH: ToolDef = {
+  spec: {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the web for current, real-time, or otherwise unfamiliar information " +
+        "— news, current events, sports scores, prices, or anything that could have " +
+        "changed since training. Returns a short list of results (title, URL, " +
+        "snippet). Only use this when the answer genuinely depends on up-to-date or " +
+        "unknown information — not for things you already know.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query." },
+        },
+        required: ["query"],
       },
-      required: ["query"],
     },
   },
-} as const;
+  enabled: (env) => Boolean(env.BRAVE_SEARCH_API_KEY),
+  run: async (env, args) => {
+    const query = args.query as string | undefined;
+    if (!query) return "web_search failed: no query provided";
 
-function availableTools(env: Env): (typeof WEB_SEARCH_TOOL)[] {
-  return env.BRAVE_SEARCH_API_KEY ? [WEB_SEARCH_TOOL] : [];
+    const results = await webSearch(env, query);
+    if (results.length === 0) return "No results found.";
+    return results.map((r) => `- ${r.title} (${r.url})\n  ${r.snippet}`).join("\n");
+  },
+};
+
+const LIST_DEVICES: ToolDef = {
+  spec: {
+    type: "function",
+    function: {
+      name: "list_devices",
+      description:
+        "Look up Home Assistant devices/entities and their current state — use " +
+        "this to find an entity_id before calling control_device (you don't " +
+        "otherwise know what devices exist or what they're called), or to answer " +
+        'a status question like "is the back door locked?". Narrow with domain ' +
+        '("light", "lock", "climate", "switch", "media_player", "alarm_control_panel", ' +
+        "etc. — the part of an entity_id before the dot) and/or search (a substring " +
+        "of the device's name, e.g. \"kitchen\"). Returns up to 100 matches.",
+      parameters: {
+        type: "object",
+        properties: {
+          domain: { type: "string", description: 'Entity domain to filter to, e.g. "light".' },
+          search: { type: "string", description: "Case-insensitive substring of the device name." },
+        },
+      },
+    },
+  },
+  enabled: (env) => Boolean(env.HA_URL && env.HA_TOKEN),
+  run: async (env, args) => {
+    const devices = await listDevices(env, args.domain as string | undefined, args.search as string | undefined);
+    if (devices.length === 0) return "No matching devices found.";
+    return devices.map((d) => `${d.entity_id} "${d.name}" — ${d.state}`).join("\n");
+  },
+};
+
+const CONTROL_DEVICE: ToolDef = {
+  spec: {
+    type: "function",
+    function: {
+      name: "control_device",
+      description:
+        "Actually control a Home Assistant device — turn lights/switches on or " +
+        "off, lock or unlock a door, arm or disarm the alarm, set a thermostat, " +
+        "play/pause media, run a scene, etc. This has real, immediate effect on " +
+        "the physical home. Look the entity_id up with list_devices first if " +
+        "you don't already have it from context. Be sure the request is clear " +
+        "and intentional before acting on high-stakes actions like unlocking a " +
+        "door or disarming the alarm — everyday things like lights or climate " +
+        "you can just do.",
+      parameters: {
+        type: "object",
+        properties: {
+          domain: { type: "string", description: 'Service domain, e.g. "light", "lock", "alarm_control_panel".' },
+          service: {
+            type: "string",
+            description: 'Service to call, e.g. "turn_on", "turn_off", "lock", "unlock", "arm_away".',
+          },
+          entity_id: { type: "string", description: "The target entity, e.g. \"light.kitchen\"." },
+          data: {
+            type: "object",
+            description: 'Extra service data if needed, e.g. { "temperature": 68 } for climate.set_temperature.',
+          },
+        },
+        required: ["domain", "service", "entity_id"],
+      },
+    },
+  },
+  enabled: (env) => Boolean(env.HA_URL && env.HA_TOKEN),
+  run: async (env, args) => {
+    const { domain, service, entity_id: entityId, data } = args as {
+      domain?: string;
+      service?: string;
+      entity_id?: string;
+      data?: Record<string, unknown>;
+    };
+    if (!domain || !service || !entityId) {
+      return "control_device failed: domain, service, and entity_id are all required";
+    }
+    return controlDevice(env, domain, service, entityId, data);
+  },
+};
+
+const ALL_TOOLS: ToolDef[] = [WEB_SEARCH, LIST_DEVICES, CONTROL_DEVICE];
+
+function availableTools(env: Env): ToolDef[] {
+  return ALL_TOOLS.filter((t) => t.enabled(env));
 }
 
 /** Run one tool call and turn its result (or failure) into the string a
- * "tool" message reports back to the model. Never throws — a failed search
+ * "tool" message reports back to the model. Never throws — a failed call
  * just gets described as one to the model, which can tell the user rather
  * than the whole request failing. */
-async function runTool(env: Env, call: ToolCall): Promise<string> {
-  if (call.function.name !== "web_search") {
+async function runTool(env: Env, tools: ToolDef[], call: ToolCall): Promise<string> {
+  const tool = tools.find((t) => t.spec.function.name === call.function.name);
+  if (!tool) {
     return `Unknown tool: ${call.function.name}`;
   }
 
   try {
-    const { query } = JSON.parse(call.function.arguments) as { query?: string };
-    if (!query) {
-      return "web_search failed: no query provided";
-    }
-
-    const results = await webSearch(env, query);
-    if (results.length === 0) {
-      return "No results found.";
-    }
-    return results.map((r) => `- ${r.title} (${r.url})\n  ${r.snippet}`).join("\n");
+    const args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+    return await tool.run(env, args);
   } catch (err) {
-    return `web_search failed: ${err instanceof Error ? err.message : String(err)}`;
+    return `${call.function.name} failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 }
 
@@ -128,6 +226,11 @@ const ROSE_PERSONA =
   "ambiguous, gently ask clarifying questions. If a solution requires " +
   "persistence (e.g. ongoing reminders, tracking tasks), confirm with the " +
   "user and set up automated follow-up as appropriate.\n\n" +
+  "When Home Assistant tools are available to you, use them for real — look " +
+  "devices up and actually call the service rather than just claiming you " +
+  "did. Everyday actions (lights, climate, media) you can just do. For " +
+  "high-stakes actions on locks or the alarm system, make sure the request " +
+  "is clearly and specifically intended before acting.\n\n" +
   "Respond in conversational, natural-sounding paragraphs. Think it through " +
   "internally first, but output ONLY your final user-facing reply — no " +
   '"Reasoning" or "Response" labels, no internal monologue, no meta-commentary. ' +
@@ -157,7 +260,7 @@ interface AssistantTurn {
 async function requestCompletion(
   env: Env,
   messages: ChatCompletionMessage[],
-  tools: (typeof WEB_SEARCH_TOOL)[]
+  tools: ToolDef[]
 ): Promise<AssistantTurn> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -168,7 +271,7 @@ async function requestCompletion(
     body: JSON.stringify({
       model: env.OPENAI_CHAT_MODEL,
       messages,
-      ...(tools.length > 0 ? { tools } : {}),
+      ...(tools.length > 0 ? { tools: tools.map((t) => t.spec) } : {}),
     }),
   });
 
@@ -200,7 +303,7 @@ async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promis
 
     conversation.push({ role: "assistant", content: turn.content, tool_calls: turn.tool_calls });
 
-    const results = await Promise.all(turn.tool_calls.map((call) => runTool(env, call)));
+    const results = await Promise.all(turn.tool_calls.map((call) => runTool(env, tools, call)));
     for (const [i, call] of turn.tool_calls.entries()) {
       conversation.push({ role: "tool", tool_call_id: call.id, content: results[i] });
     }
