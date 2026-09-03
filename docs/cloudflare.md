@@ -74,10 +74,10 @@ runs `wrangler deploy` on every push to `main` that touches `cloudflare/`
 (or the workflow file itself), and can also be triggered by hand from the
 **Actions** tab (`workflow_dispatch`) without a code change at all.
 
-It needs two repository secrets, added once via
-**Settings → Secrets and variables → Actions → New repository secret** (in
-the browser, not a local `.env` — GitHub encrypts these and only exposes
-them to workflow runs):
+It needs two repository **secrets**, added once via
+**Settings → Secrets and variables → Actions → Secrets tab → New repository secret**
+(in the browser, not a local `.env` — GitHub encrypts these and only
+exposes them to workflow runs):
 
 - `CLOUDFLARE_API_TOKEN` — a token with Workers Scripts, D1, and Vectorize
   edit permissions ([create one here](https://dash.cloudflare.com/profile/api-tokens))
@@ -89,9 +89,41 @@ refuses to authenticate non-interactively with nothing to authenticate
 with) — it does not silently no-op, so a red **Deploy ROSE Worker** run in
 the **Actions** tab means exactly this until they're added.
 
+It also needs one repository **variable** (same Settings page, but the
+**Variables** tab, not Secrets — plain text rather than encrypted, since
+this one isn't sensitive):
+
+- `CLOUDFLARE_D1_DATABASE_ID` — your D1 database's id (**Cloudflare
+  dashboard → Workers & Pages → D1 → rose-db**, shown near the top).
+
+Why this one's handled differently from the two secrets above:
+`cloudflare/wrangler.jsonc` is committed with a placeholder
+(`REPLACE_WITH_YOUR_D1_DATABASE_ID`) rather than a real database id — this
+repo may end up templating more than one deployment (see the "commercial
+product" note below), so it shouldn't carry any single person's database
+id as checked-in state, the same reason `scripts/setup.sh` only ever patches
+that placeholder into your own *local, uncommitted* copy of the file. The
+workflow's "Set D1 database_id" step does the equivalent patch in CI,
+sourced from this variable instead of a hardcoded value — the committed
+file itself never changes. A database id isn't a secret on its own (it's a
+pointer, not a credential — nobody can reach your data with just the id),
+which is why it's a plain variable rather than an encrypted one.
+
 The Worker's own runtime secrets (`OPENAI_API_KEY`, `ROSE_API_KEY`, ...) are
 a separate thing, set once via `wrangler secret put` as above — this
 workflow only deploys code, it never touches those.
+
+### If you commercialize this later
+
+Right now everything — one D1 database, one Vectorize index, one set of
+secrets — is scoped to a single household (yours). The variable/secret
+split above keeps your personal database id out of git history, but
+selling this to other people is still a bigger step than that alone:
+each customer needs their own D1 database, Vectorize index, and Worker (or
+some real multi-tenant redesign of the D1 schema), plus a way to onboard
+someone without you personally running these setup steps for them. Not
+needed today — just worth remembering this repo's current shape is
+"one deployment," not "a product," when that day comes.
 
 ## API
 
