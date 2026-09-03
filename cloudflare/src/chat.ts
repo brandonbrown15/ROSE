@@ -245,18 +245,30 @@ const ROSE_PERSONA =
   '"Reasoning" or "Response" labels, no internal monologue, no meta-commentary. ' +
   "Just the message as it should sound to the resident.";
 
+const MEMORY_CURRENCY_GUIDANCE =
+  " Some RELEVANT MEMORIES may be marked \"[no longer current — history]\" — " +
+  "that's something that used to be true and no longer is (a past job, an " +
+  "old address, a preference that's since changed), not something to state " +
+  "as true today. Treat it as history, not the present answer: e.g. don't " +
+  "say someone works somewhere they used to work. But don't just discard " +
+  "it either — plenty of questions genuinely want both (helping with a job " +
+  "application should draw on past experience alongside current), so use " +
+  "it when it's actually relevant, phrased as past.";
+
 function buildSystemPrompt(personName: string | null): string {
   const personGuidance = personName
     ? ` You're currently speaking with ${personName}. Use the RELEVANT ` +
       "MEMORIES section (if present) to stay consistent with what you've been " +
       "told before — those personal memories belong to them specifically, not " +
-      "the household at large."
+      "the household at large." +
+      MEMORY_CURRENCY_GUIDANCE
     : " You don't currently know who you're speaking with. Use the RELEVANT " +
       "MEMORIES section (if present) to stay consistent with what you've been " +
       "told before — those are household-wide, not personal to anyone. If " +
       "knowing who's asking would meaningfully change your answer (e.g. " +
       '"what\'s on my calendar"), you may ask who you\'re talking to — but ' +
-      "don't ask on every message, only when it actually matters.";
+      "don't ask on every message, only when it actually matters." +
+      MEMORY_CURRENCY_GUIDANCE;
 
   return ROSE_PERSONA + personGuidance;
 }
@@ -416,7 +428,14 @@ export async function handleChat(
   ];
 
   if (memories.length > 0) {
-    const memoryBlock = memories.map((m) => `- ${m.content}`).join("\n");
+    // Non-current memories (supersede.ts) are still genuinely true of the
+    // past — label them so the model never states retired history as
+    // today's fact, while still letting it draw on both when a question
+    // actually calls for that (e.g. "help me apply for this job" wants
+    // current *and* past experience).
+    const memoryBlock = memories
+      .map((m) => (m.current ? `- ${m.content}` : `- [no longer current — history] ${m.content}`))
+      .join("\n");
     messages.push({ role: "system", content: `RELEVANT MEMORIES:\n${memoryBlock}` });
   }
 
