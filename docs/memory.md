@@ -28,6 +28,18 @@ a durable fact here worth remembering?* Small talk, one-off questions, and
 fact, a standing instruction, or a correction gets kept — as a short,
 self-contained sentence, not the raw exchange.
 
+That question also includes sincerity, not just topic: an obvious joke,
+piece of roleplay, or made-up exaggeration ("I'm secretly a dragon," a kid
+saying they never have to go to bed) gets discarded the same as small talk,
+even though it's phrased just as confidently as a real preference. A
+household includes kids and playful adults, and distillation runs with no
+memory of tone or context beyond the one exchange it's looking at, so this
+is necessarily a judgment call, not a fact-check — there's no way to verify
+whether a stated preference is *true*, only whether it reads as sincere.
+When genuinely unsure, it errs toward not storing: a real fact missed once
+just gets mentioned again in a later conversation; a fictional one stored
+as real doesn't correct itself.
+
 If the model decides yes:
 
 1. The distilled sentence is stored in D1's `memories` table.
