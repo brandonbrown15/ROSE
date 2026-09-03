@@ -199,7 +199,7 @@ To turn it on:
 
 The model decides on its own, per message, whether a question actually
 needs a live search — it won't search for things it already knows. See
-`WEB_SEARCH_TOOL` and `completeChat` in
+`WEB_SEARCH` and `completeChat` in
 [`cloudflare/src/chat.ts`](../cloudflare/src/chat.ts) for how the tool-call
 loop works, and [`search.ts`](../cloudflare/src/search.ts) for the Brave API
 call itself.
