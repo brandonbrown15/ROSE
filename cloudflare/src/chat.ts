@@ -10,6 +10,7 @@ import {
 } from "./memory";
 import { findOrCreatePerson, listPeople, type Person } from "./people";
 import { recall } from "./recall";
+import { webSearch } from "./search";
 
 interface ChatRequestBody {
   conversation_id?: string;
@@ -25,9 +26,76 @@ interface ChatRequestBody {
   remember?: boolean;
 }
 
+interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+// The message shape the Chat Completions API accepts, flattened rather than
+// a discriminated union — `tool_calls`/`tool_call_id` only show up mid-loop,
+// when the model has asked to call a tool (see `completeChat` below);
+// everywhere else in this file only ever produces plain system/user/
+// assistant messages with just `content` set.
 interface ChatCompletionMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+}
+
+// Tool definitions handed to the model, and the handlers that actually run
+// them. Only offered when the backing service is configured — see
+// `availableTools` below — so ROSE degrades to answering from what it
+// already knows when e.g. BRAVE_SEARCH_API_KEY isn't set, rather than
+// offering a tool that would just fail.
+const WEB_SEARCH_TOOL = {
+  type: "function",
+  function: {
+    name: "web_search",
+    description:
+      "Search the web for current, real-time, or otherwise unfamiliar information " +
+      "— news, current events, sports scores, prices, or anything that could have " +
+      "changed since training. Returns a short list of results (title, URL, " +
+      "snippet). Only use this when the answer genuinely depends on up-to-date or " +
+      "unknown information — not for things you already know.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query." },
+      },
+      required: ["query"],
+    },
+  },
+} as const;
+
+function availableTools(env: Env): (typeof WEB_SEARCH_TOOL)[] {
+  return env.BRAVE_SEARCH_API_KEY ? [WEB_SEARCH_TOOL] : [];
+}
+
+/** Run one tool call and turn its result (or failure) into the string a
+ * "tool" message reports back to the model. Never throws — a failed search
+ * just gets described as one to the model, which can tell the user rather
+ * than the whole request failing. */
+async function runTool(env: Env, call: ToolCall): Promise<string> {
+  if (call.function.name !== "web_search") {
+    return `Unknown tool: ${call.function.name}`;
+  }
+
+  try {
+    const { query } = JSON.parse(call.function.arguments) as { query?: string };
+    if (!query) {
+      return "web_search failed: no query provided";
+    }
+
+    const results = await webSearch(env, query);
+    if (results.length === 0) {
+      return "No results found.";
+    }
+    return results.map((r) => `- ${r.title} (${r.url})\n  ${r.snippet}`).join("\n");
+  } catch (err) {
+    return `web_search failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 // ROSE's persona. `personGuidance` below is appended per-request — it's the
@@ -81,24 +149,64 @@ function buildSystemPrompt(personName: string | null): string {
   return ROSE_PERSONA + personGuidance;
 }
 
-async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promise<string> {
+interface AssistantTurn {
+  content: string | null;
+  tool_calls?: ToolCall[];
+}
+
+async function requestCompletion(
+  env: Env,
+  messages: ChatCompletionMessage[],
+  tools: (typeof WEB_SEARCH_TOOL)[]
+): Promise<AssistantTurn> {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       authorization: `Bearer ${env.OPENAI_API_KEY}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model: env.OPENAI_CHAT_MODEL, messages }),
+    body: JSON.stringify({
+      model: env.OPENAI_CHAT_MODEL,
+      messages,
+      ...(tools.length > 0 ? { tools } : {}),
+    }),
   });
 
   if (!res.ok) {
     throw new Error(`chat completion request failed: ${res.status} ${await res.text()}`);
   }
 
-  const data = (await res.json()) as {
-    choices: { message: { content: string } }[];
-  };
-  return data.choices[0].message.content;
+  const data = (await res.json()) as { choices: { message: AssistantTurn }[] };
+  return data.choices[0].message;
+}
+
+/**
+ * Run the chat completion, executing any tool calls the model makes and
+ * feeding the results back, until it produces a final text reply. Bounded to
+ * a handful of rounds — a model that just keeps calling tools forever would
+ * otherwise turn one /chat request into an unbounded number of upstream
+ * calls (OpenAI + whatever the tool hits).
+ */
+async function completeChat(env: Env, messages: ChatCompletionMessage[]): Promise<string> {
+  const tools = availableTools(env);
+  const conversation = [...messages];
+
+  for (let round = 0; round < 5; round++) {
+    const turn = await requestCompletion(env, conversation, tools);
+
+    if (!turn.tool_calls || turn.tool_calls.length === 0) {
+      return turn.content ?? "";
+    }
+
+    conversation.push({ role: "assistant", content: turn.content, tool_calls: turn.tool_calls });
+
+    const results = await Promise.all(turn.tool_calls.map((call) => runTool(env, call)));
+    for (const [i, call] of turn.tool_calls.entries()) {
+      conversation.push({ role: "tool", tool_call_id: call.id, content: results[i] });
+    }
+  }
+
+  throw new Error("chat completion did not settle after 5 tool-call rounds");
 }
 
 export async function handleChat(
