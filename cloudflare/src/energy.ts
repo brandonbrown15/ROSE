@@ -1,6 +1,11 @@
 import type { Env } from "./index";
 import type { HouseholdEnergyConfig } from "./households";
-import { getHouseholdHaConfig, listHouseholdsReadyForEnergyOptimization } from "./households";
+import {
+  getHouseholdHaConfig,
+  getHouseholdHvacAutoState,
+  listHouseholdsReadyForEnergyOptimization,
+  setHouseholdHvacAutoState,
+} from "./households";
 import { controlDevice, getEntityState } from "./homeAssistant";
 import { getManualTariffRates } from "./manualTariff";
 import { getAgileRates, type AgileRate } from "./octopus";
@@ -105,6 +110,43 @@ function nearestWeather(weather: WeatherPoint[], atISO: string): WeatherPoint | 
 }
 
 /**
+ * 'auto' hvac_mode resolution: sticky hysteresis between two thresholds
+ * (config.autoHeatBelowC / autoCoolAboveC) rather than a single cutoff, so
+ * a household near the boundary doesn't flip its heat pump/AC direction
+ * every 30-minute cycle. Stays on whichever side (hvac_auto_state) it's
+ * already on until the *current* outdoor reading actually crosses into the
+ * other threshold, using the same forecast buildPlan already fetched for
+ * this cycle — no extra API call. Persists the new state when it changes;
+ * a plain 'heat'/'cool' household never touches hvac_auto_state at all.
+ * No usable weather this cycle → hold whatever it was already on rather
+ * than guess.
+ */
+async function resolveEffectiveHvacMode(
+  env: Env,
+  householdId: string,
+  config: HouseholdEnergyConfig,
+  weather: WeatherPoint[],
+  now: Date
+): Promise<"heat" | "cool"> {
+  if (config.hvacMode !== "auto") return config.hvacMode;
+
+  const currentState = await getHouseholdHvacAutoState(env, householdId);
+  const current = nearestWeather(weather, now.toISOString());
+  if (!current) return currentState;
+
+  let next = currentState;
+  if (currentState === "heat" && current.outsideTempC > config.autoCoolAboveC) {
+    next = "cool";
+  } else if (currentState === "cool" && current.outsideTempC < config.autoHeatBelowC) {
+    next = "heat";
+  }
+  if (next !== currentState) {
+    await setHouseholdHvacAutoState(env, householdId, next);
+  }
+  return next;
+}
+
+/**
  * Build a heating plan for the next 24h for one household: rank each Agile
  * price slot (that household's own tariff region) by price-adjusted-for-
  * efficiency, and classify the cheapest third as "preheat", the priciest
@@ -112,7 +154,7 @@ function nearestWeather(weather: WeatherPoint[], atISO: string): WeatherPoint | 
  * a real thermal model of the house — see docs/energy.md for what a better
  * version would need.
  */
-export async function buildPlan(env: Env, config: HouseholdEnergyConfig): Promise<PlanSlot[]> {
+export async function buildPlan(env: Env, householdId: string, config: HouseholdEnergyConfig): Promise<PlanSlot[]> {
   const now = new Date();
   const horizon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
@@ -143,7 +185,8 @@ export async function buildPlan(env: Env, config: HouseholdEnergyConfig): Promis
   if (rates.length === 0) return [];
 
   const comfortTempC = (config.minTempC + config.maxTempC) / 2;
-  const heating = config.hvacMode !== "cool";
+  const effectiveMode = await resolveEffectiveHvacMode(env, householdId, config, weather, now);
+  const heating = effectiveMode !== "cool";
 
   // The COP curve (approximateCop) models heat pump *heating* efficiency —
   // it gets less efficient as it gets colder outside, so a cold cheap slot
@@ -211,10 +254,17 @@ export async function runHeatPumpOptimization(
   householdId: string,
   config: HouseholdEnergyConfig
 ): Promise<HeatPumpResult> {
-  const plan = await buildPlan(env, config);
+  const plan = await buildPlan(env, householdId, config);
   if (plan.length === 0) {
     return { applied: null, plan: [] };
   }
+
+  // buildPlan already resolved (and persisted, if it changed) 'auto''s
+  // effective side for this cycle — re-read it rather than recompute, so
+  // the safety override below always agrees with what the plan itself just
+  // used. One cheap extra read; skipped entirely for a plain 'heat'/'cool'
+  // household.
+  const effectiveHvacMode = config.hvacMode === "auto" ? await getHouseholdHvacAutoState(env, householdId) : config.hvacMode;
 
   await env.DB.batch(
     plan.map((slot) =>
@@ -253,7 +303,7 @@ export async function runHeatPumpOptimization(
     // outside the comfort band in the direction that matters for this
     // mode — too cold to heat, too hot to cool — override everything above
     // and act immediately. Comfort/safety beats cost optimization, always.
-    if (config.hvacMode === "cool") {
+    if (effectiveHvacMode === "cool") {
       if (Number.isFinite(roomTempC) && roomTempC > config.maxTempC) {
         applied = {
           ...applied,
