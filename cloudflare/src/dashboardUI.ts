@@ -356,9 +356,13 @@ export const DASHBOARD_HTML = `<!doctype html>
       var energyToggleBtn = document.createElement('button');
       energyToggleBtn.className = 'secondary';
       energyToggleBtn.textContent = 'Heating optimization';
+      var deviceToggleBtn = document.createElement('button');
+      deviceToggleBtn.className = 'secondary';
+      deviceToggleBtn.textContent = 'Boreas device';
       row.appendChild(info);
       row.appendChild(toggleBtn);
       row.appendChild(energyToggleBtn);
+      row.appendChild(deviceToggleBtn);
       wrap.appendChild(row);
 
       var haForm = document.createElement('form');
@@ -404,7 +408,13 @@ export const DASHBOARD_HTML = `<!doctype html>
       var energyForm = document.createElement('form');
       energyForm.className = 'ha-form hidden-form';
       energyForm.innerHTML =
-        '<p class="sub" style="margin:0 0 4px;">Needs a Home Assistant connection above already set. This wires up the plumbing — the homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
+        '<p class="sub energy-ha-note" style="margin:0 0 4px;">Needs a Home Assistant connection above already set. This wires up the plumbing — the homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
+        '<p class="sub energy-device-note hidden-form" style="margin:0 0 4px;">Controlled by a standalone Boreas device instead of Home Assistant — provision its credential from the “Boreas device” panel above. The homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
+        '<label>Control method</label>' +
+        '<select class="energy-control">' +
+        '<option value="home_assistant">Home Assistant</option>' +
+        '<option value="boreas_device">Standalone Boreas device</option>' +
+        '</select>' +
         '<label>Mode</label>' +
         '<select class="energy-hvac-mode">' +
         '<option value="heat">Heating (heat pump)</option>' +
@@ -418,10 +428,12 @@ export const DASHBOARD_HTML = `<!doctype html>
         '<label>Switch to cooling above (°C)</label>' +
         '<input type="number" class="energy-auto-cool-above" placeholder="24">' +
         '</div>' +
+        '<div class="energy-ha-fields">' +
         '<label>Climate entity ID</label>' +
         '<input type="text" class="energy-heatpump" placeholder="climate.living_room_heat_pump" required>' +
         '<label>Room temperature sensor entity ID</label>' +
         '<input type="text" class="energy-roomtemp" placeholder="sensor.living_room_temperature" required>' +
+        '</div>' +
         '<label>Minimum comfort temperature (°C)</label>' +
         '<input type="number" class="energy-mintemp" placeholder="18" required>' +
         '<label>Maximum comfort temperature (°C)</label>' +
@@ -459,6 +471,12 @@ export const DASHBOARD_HTML = `<!doctype html>
       var windowsContainer = energyForm.querySelector('.energy-windows');
       var hvacModeSelect = energyForm.querySelector('.energy-hvac-mode');
       var autoFields = energyForm.querySelector('.energy-auto-fields');
+      var controlSelect = energyForm.querySelector('.energy-control');
+      var haFields = energyForm.querySelector('.energy-ha-fields');
+      var haNote = energyForm.querySelector('.energy-ha-note');
+      var deviceNote = energyForm.querySelector('.energy-device-note');
+      var heatpumpInput = energyForm.querySelector('.energy-heatpump');
+      var roomTempInput = energyForm.querySelector('.energy-roomtemp');
 
       tariffTypeSelect.addEventListener('change', function () {
         var isManual = tariffTypeSelect.value === 'manual';
@@ -468,6 +486,18 @@ export const DASHBOARD_HTML = `<!doctype html>
 
       hvacModeSelect.addEventListener('change', function () {
         autoFields.classList.toggle('hidden-form', hvacModeSelect.value !== 'auto');
+      });
+
+      controlSelect.addEventListener('change', function () {
+        var isDevice = controlSelect.value === 'boreas_device';
+        haFields.classList.toggle('hidden-form', isDevice);
+        haNote.classList.toggle('hidden-form', isDevice);
+        deviceNote.classList.toggle('hidden-form', !isDevice);
+        // Only require the HA entity IDs in HA mode — a standalone device
+        // stands in for both, and a hidden-but-required field would block
+        // submit with no visible reason why.
+        heatpumpInput.required = !isDevice;
+        roomTempInput.required = !isDevice;
       });
 
       function addOffPeakWindowRow() {
@@ -491,14 +521,18 @@ export const DASHBOARD_HTML = `<!doctype html>
         var energyStatus = energyForm.querySelector('.energy-status');
 
         var body = {
-          heatpump_entity_id: energyForm.querySelector('.energy-heatpump').value.trim(),
-          room_temp_entity_id: energyForm.querySelector('.energy-roomtemp').value.trim(),
+          heatpump_control: controlSelect.value,
           min_temp_c: Number(energyForm.querySelector('.energy-mintemp').value),
           max_temp_c: Number(energyForm.querySelector('.energy-maxtemp').value),
           postcode: energyForm.querySelector('.energy-postcode').value.trim(),
           hvac_mode: hvacModeSelect.value,
           tariff_type: tariffTypeSelect.value
         };
+
+        if (controlSelect.value !== 'boreas_device') {
+          body.heatpump_entity_id = heatpumpInput.value.trim();
+          body.room_temp_entity_id = roomTempInput.value.trim();
+        }
 
         if (hvacModeSelect.value === 'auto') {
           var autoHeatBelow = energyForm.querySelector('.energy-auto-heat-below').value.trim();
@@ -536,6 +570,56 @@ export const DASHBOARD_HTML = `<!doctype html>
           setStatus(energyStatus, resolved ? 'Saved. (' + resolved + ')' : 'Saved.', 'ok');
         }).catch(function (err) {
           setStatus(energyStatus, 'Could not reach ROSE. (' + err.message + ')', 'error');
+        });
+      });
+
+      // Standalone Boreas device provisioning (docs/boreas-device.md) —
+      // generates the device's own bearer credential (device_key),
+      // separate from this household's api_key above, for a physical unit
+      // to authenticate POST /device/checkin with. Switching this
+      // household's actual control method to 'boreas_device' still happens
+      // in the "Heating optimization" panel above — provisioning a device
+      // here doesn't do that on its own, so pairing a device with a
+      // household you haven't switched over yet is harmless.
+      var deviceForm = document.createElement('form');
+      deviceForm.className = 'ha-form hidden-form';
+      deviceForm.innerHTML =
+        '<p class="sub" style="margin:0 0 4px;">Generates the credential a standalone Boreas unit authenticates with. Provisioning (or re-provisioning) replaces any previous key for this household — the old one stops working immediately.</p>' +
+        '<label>Device name (optional)</label>' +
+        '<input type="text" class="device-name" placeholder="Living room Boreas unit">' +
+        '<button type="submit">Provision device</button>' +
+        '<div class="status device-status"></div>' +
+        '<div class="apikey-banner device-key-banner" hidden>' +
+        '<div class="label">Device key — save this now:</div>' +
+        '<code class="device-key-value"></code>' +
+        '<div class="warn">This won\'t be shown again. Flash or configure it into the physical Boreas unit.</div>' +
+        '</div>';
+      wrap.appendChild(deviceForm);
+
+      deviceToggleBtn.addEventListener('click', function () {
+        deviceForm.classList.toggle('hidden-form');
+      });
+
+      deviceForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var deviceStatus = deviceForm.querySelector('.device-status');
+        var deviceKeyBanner = deviceForm.querySelector('.device-key-banner');
+        var nameVal = deviceForm.querySelector('.device-name').value.trim();
+        deviceKeyBanner.hidden = true;
+        setStatus(deviceStatus, 'Provisioning…', 'muted');
+        api('/integrator/households/' + encodeURIComponent(h.id) + '/device', {
+          method: 'POST',
+          body: JSON.stringify({ name: nameVal || undefined })
+        }).then(function (result) {
+          if (!result.ok) {
+            setStatus(deviceStatus, result.data.error || 'failed to provision', 'error');
+            return;
+          }
+          setStatus(deviceStatus, 'Provisioned.', 'ok');
+          deviceForm.querySelector('.device-key-value').textContent = result.data.device.device_key;
+          deviceKeyBanner.hidden = false;
+        }).catch(function (err) {
+          setStatus(deviceStatus, 'Could not reach ROSE. (' + err.message + ')', 'error');
         });
       });
 

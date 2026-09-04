@@ -54,34 +54,75 @@ often the comms cabinet and the heat pump's electrical connection aren't
 in the same place. Same reasoning as offering both options rather than
 picking one.
 
-## Open questions this needs answers to before any firmware work starts
+## Open questions
 
-### 1. Does the device replace Home Assistant, or bridge into it?
+### 1. Does the device replace Home Assistant, or bridge into it? — RESOLVED: standalone
 
-- **A — Standalone (recommended starting point).** The device talks
-  directly to the Cloudflare Worker: reads the heat pump over RS485/Modbus
-  (or whatever interface that model needs), pushes state, and applies
-  target-temperature commands the Worker sends back. No Home Assistant
-  involved at all. This is what actually removes the Prerequisite-1 barrier
-  above, and is the more obviously sellable "just the heating optimizer"
-  product.
-- **B — Bridge only.** The device exposes the heat pump to an *existing*
-  Home Assistant instance (e.g. as a local Modbus-over-TCP endpoint HA's
-  own Modbus integration points at, or an ESPHome-style device HA
-  auto-discovers) — still requires Home Assistant, but removes the manual
-  RS485 wiring/YAML-writing burden for households that already run it.
-- **Both** is possible in principle (report to the Worker directly *and*
-  expose a local HA entity) but is meaningfully more firmware complexity
-  for v1 than either alone.
+Brandon's call (2026-09-04): **standalone.** The device talks directly to
+the Cloudflare Worker — reads the heat pump over RS485/Modbus (or whatever
+interface that model needs), and applies target-temperature commands the
+Worker computes. No Home Assistant involved at all. This is what actually
+removes the Prerequisite-1 barrier above, and is the more obviously
+sellable "just the heating optimizer" product. (The alternative
+considered — bridging into an existing Home Assistant instance — is not
+being built; noted here only so the reasoning isn't lost.)
 
-This decides real backend work: (A) means the Worker needs a new
-device-auth class (`households.ts` currently has exactly two —
-household bearer token and integrator session cookie — a Boreas unit is
-neither: it's not a chat client and it's not a person logging into a
-dashboard) plus a telemetry-ingestion/command-dispatch API for it to call.
-(B) needs closer to nothing on the Worker side — the device would just be
-another Home Assistant integration from ROSE's point of view, identical to
-how any heat pump looks today.
+**Built now, ahead of any hardware existing**, so the Worker side is ready
+whenever firmware starts:
+
+- Migration `0012_boreas_devices.sql`: `households` gains
+  `heatpump_control` (`'home_assistant'` default, or `'boreas_device'`);
+  new `boreas_devices` table (one per household for v1, matching the
+  existing single-zone limitation) holding a device's own bearer
+  credential (`device_key` — genuinely separate from the household's own
+  `api_key`, so a compromised physical device can't be used to authenticate
+  as the household's chat/HA client) plus its last-reported room
+  temperature and the pending command for it to pick up.
+- **Why polling, not push**: a Boreas unit sits behind the household's own
+  home network/NAT — the Worker can never dial into it directly, unlike a
+  household's Home-Assistant instance (which the household has to make
+  publicly reachable, e.g. via Cloudflare Tunnel — Prerequisite 1). So
+  control flips direction: the device calls the Worker periodically
+  instead.
+- `cloudflare/src/devices.ts`: `provisionBoreasDevice`/`resolveBoreasDevice`
+  (device identity/auth) and `recordDeviceCheckin`/`getDeviceRoomTempC`/
+  `setPendingDeviceCommand` (the check-in round trip).
+- `POST /integrator/households/:id/device` — same session-authed, ownership-
+  checked pattern as the HA/energy endpoints, provisions (or rotates) a
+  device's credential. Shown once, same as a household's own `api_key`.
+- `POST /device/checkin` — the device's own bearer auth (its `device_key`,
+  not the household's `api_key`): `{ "room_temp_c": 19.4 }` in, and back
+  comes `{ "target_temp_c": 21, "hvac_mode": "heat" }` — whatever the most
+  recent 30-minute optimization cycle decided. Nulls back mean nothing's
+  been computed yet (device polling before the household's first cycle, or
+  before `heatpump_control` was ever switched to `'boreas_device'`) — same
+  "missing config = no-op, not a guess" principle as the rest of
+  `energy.ts`.
+- `energy.ts`'s `runHeatPumpOptimization` branches on `heatpumpControl`:
+  `'boreas_device'` reads the room temperature from the device's last
+  check-in instead of a Home Assistant sensor, and writes the computed
+  target as that household's pending command instead of calling
+  `climate.set_temperature` — everything else (the price/weather ranking,
+  the safety floor/ceiling override) is identical either way.
+- Dashboard gets a **Boreas device** panel per household (provision/rotate
+  the credential) and the heating-config form gets a **Control method**
+  dropdown that hides the Home-Assistant-only entity-ID fields when set to
+  standalone.
+
+Verified: full migration chain (0001–0012) locally, zero FK violations;
+the check-in round trip (provision → write a pending command → check in
+with a room reading → read the command back → confirm the reading was
+stored) directly against sqlite's `UPDATE ... RETURNING`, which is what
+`recordDeviceCheckin` relies on.
+
+**Still not decided — genuinely needs hardware/firmware to answer**: the
+actual wire protocol between the physical device and the Worker (this
+assumes plain HTTPS + JSON, matching everything else this Worker already
+does — MQTT would be the industrial-IoT-conventional alternative, but adds
+a broker and doesn't obviously buy anything here), check-in frequency, and
+what happens if a device goes offline for an extended period (right now:
+nothing — `pending_target_temp_c` just goes stale until the next cron
+cycle overwrites it, no alerting yet).
 
 ### 2. Heating-only billing
 

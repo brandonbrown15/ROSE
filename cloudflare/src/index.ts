@@ -10,6 +10,7 @@ import {
   verifyCustomerSessionCookie,
 } from "./customers";
 import { DASHBOARD_HTML } from "./dashboardUI";
+import { provisionBoreasDevice, recordDeviceCheckin, resolveBoreasDevice } from "./devices";
 import { handleEnergyRun, handleEnergyStatus, runAllHeatPumpOptimizations, runSolarAndEvOptimization } from "./energy";
 import {
   createHousehold,
@@ -345,6 +346,7 @@ async function handleSetHouseholdEnergy(
   let body: {
     heatpump_entity_id?: string;
     room_temp_entity_id?: string;
+    heatpump_control?: string;
     min_temp_c?: number;
     max_temp_c?: number;
     postcode?: string;
@@ -362,11 +364,25 @@ async function handleSetHouseholdEnergy(
     return jsonError("invalid JSON body", 400);
   }
 
-  if (typeof body.heatpump_entity_id !== "string" || !body.heatpump_entity_id) {
-    return jsonError("'heatpump_entity_id' is required", 400);
+  if (
+    body.heatpump_control !== undefined &&
+    body.heatpump_control !== "home_assistant" &&
+    body.heatpump_control !== "boreas_device"
+  ) {
+    return jsonError("'heatpump_control' must be 'home_assistant' or 'boreas_device' if given", 400);
   }
-  if (typeof body.room_temp_entity_id !== "string" || !body.room_temp_entity_id) {
-    return jsonError("'room_temp_entity_id' is required", 400);
+  // 'boreas_device': the standalone unit itself (see docs/boreas-device.md,
+  // POST /integrator/households/:id/device) stands in for both these HA
+  // entity IDs — nothing to validate here in that mode.
+  const heatpumpControl = body.heatpump_control === "boreas_device" ? "boreas_device" : "home_assistant";
+
+  if (heatpumpControl === "home_assistant") {
+    if (typeof body.heatpump_entity_id !== "string" || !body.heatpump_entity_id) {
+      return jsonError("'heatpump_entity_id' is required when heatpump_control is 'home_assistant'", 400);
+    }
+    if (typeof body.room_temp_entity_id !== "string" || !body.room_temp_entity_id) {
+      return jsonError("'room_temp_entity_id' is required when heatpump_control is 'home_assistant'", 400);
+    }
   }
   if (typeof body.min_temp_c !== "number" || typeof body.max_temp_c !== "number" || body.min_temp_c >= body.max_temp_c) {
     return jsonError("'min_temp_c' and 'max_temp_c' are required numbers, with min_temp_c < max_temp_c", 400);
@@ -440,8 +456,9 @@ async function handleSetHouseholdEnergy(
   }
 
   await setHouseholdEnergyConfig(env, householdId, {
-    heatpumpEntityId: body.heatpump_entity_id,
-    roomTempEntityId: body.room_temp_entity_id,
+    heatpumpEntityId: body.heatpump_entity_id ?? "",
+    roomTempEntityId: body.room_temp_entity_id ?? "",
+    heatpumpControl,
     minTempC: body.min_temp_c,
     maxTempC: body.max_temp_c,
     postcode: geocoded.postcode,
@@ -454,6 +471,61 @@ async function handleSetHouseholdEnergy(
   });
 
   return jsonOk({ ok: true, resolved_postcode: geocoded.postcode });
+}
+
+/** Provision (or rotate, if one already exists) a household's standalone
+ * Boreas device credential — see devices.ts and docs/boreas-device.md.
+ * Same trust boundary and ownership check as the HA/energy config
+ * endpoints above: an integrator setting up a household they manage.
+ * Returns device_key in plaintext, shown once, same pattern as a
+ * household's own api_key at creation. Doesn't touch heatpump_control
+ * itself — that's set via POST /integrator/households/:id/energy (below
+ * on the same page in the dashboard), so provisioning a device doesn't
+ * silently switch a household off Home Assistant. */
+async function handleSetHouseholdDevice(
+  request: Request,
+  env: Env,
+  integratorId: string,
+  householdId: string
+): Promise<Response> {
+  if (!(await householdBelongsToIntegrator(env, householdId, integratorId))) {
+    return jsonError("not found", 404);
+  }
+
+  let body: { name?: string };
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+
+  const device = await provisionBoreasDevice(env, householdId, typeof body.name === "string" ? body.name : null);
+  return jsonOk({ device: { id: device.id, name: device.name, device_key: device.device_key } });
+}
+
+/** POST /device/checkin — a standalone Boreas unit's own periodic poll
+ * (device-key authed, see the routing above): reports its current room
+ * temperature reading and gets back whatever the most recent 30-min
+ * optimization cycle decided the target should be, for the device to
+ * apply itself over whatever local interface it has to the heat pump.
+ * Nulls back (rather than an error) mean "nothing computed yet" — a
+ * device polling before its household's first cron cycle, or before
+ * heatpump_control was ever switched to 'boreas_device' — same
+ * "missing = no-op" principle as the rest of energy.ts. */
+async function handleDeviceCheckin(request: Request, env: Env, deviceId: string): Promise<Response> {
+  let body: { room_temp_c?: number };
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("invalid JSON body", 400);
+  }
+
+  if (typeof body.room_temp_c !== "number" || !Number.isFinite(body.room_temp_c)) {
+    return jsonError("'room_temp_c' is required and must be a finite number", 400);
+  }
+
+  const command = await recordDeviceCheckin(env, deviceId, body.room_temp_c);
+  return jsonOk({ target_temp_c: command.targetTempC, hvac_mode: command.hvacMode });
 }
 
 const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -799,6 +871,11 @@ export default {
         return withCors(await handleSetHouseholdEnergy(request, env, integratorId, energyMatch[1]));
       }
 
+      const deviceMatch = url.pathname.match(/^\/integrator\/households\/([^/]+)\/device$/);
+      if (deviceMatch && request.method === "POST") {
+        return withCors(await handleSetHouseholdDevice(request, env, integratorId, deviceMatch[1]));
+      }
+
       return withCors(jsonError("not found", 404));
     }
 
@@ -838,6 +915,23 @@ export default {
       }
 
       return withCors(jsonError("not found", 404));
+    }
+
+    // A standalone Boreas device's own check-in — a fourth auth domain,
+    // its own bearer credential (devices.ts's device_key), genuinely
+    // separate from a household's own api_key (see migration 0012's
+    // comment on why). Checked here, ahead of the household bearer-token
+    // gate below, same reasoning as portal/integrator above: a device_key
+    // would never resolve as a household token anyway, but resolving it
+    // explicitly here gives a real device its own auth path rather than
+    // falling through to a generic 401. See docs/boreas-device.md.
+    if (url.pathname === "/device/checkin" && request.method === "POST") {
+      const deviceToken = extractBearerToken(request);
+      const device = deviceToken ? await resolveBoreasDevice(env, deviceToken) : null;
+      if (!device) {
+        return withCors(unauthorized());
+      }
+      return withCors(await handleDeviceCheckin(request, env, device.id));
     }
 
     const token = extractBearerToken(request);

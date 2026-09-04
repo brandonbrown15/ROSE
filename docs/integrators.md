@@ -157,12 +157,41 @@ optionally, `manual_off_peak_windows`) — see
 [`energy.md`](energy.md#enabling-it) for the full shape and why there are
 two.
 
+`heatpump_control` is `"home_assistant"` (default if omitted) or
+`"boreas_device"` — a standalone Boreas unit instead of Home Assistant
+(planned hardware — see [`boreas-device.md`](boreas-device.md)).
+`heatpump_entity_id`/`room_temp_entity_id` become optional in that mode —
+a provisioned device (below) stands in for both.
+
 Technical setup for [heating optimization](energy.md) — this is the
 *installer's* side of it (which entities, which tariff, which
 comfort band), entirely separate from whether the household is actually
 *paying* for the add-on, which the homeowner controls from their own
 [billing portal](billing.md). Setting this doesn't start anything running
 on its own; see `billing.md`'s Enforcement section for the full gate.
+
+### Provisioning a standalone Boreas device
+
+#### `POST /integrator/households/:id/device`
+
+Session-authed, same ownership check as the endpoints above. **Planned
+hardware — no physical unit exists yet**; this is the Worker-side API it
+authenticates against (see [`boreas-device.md`](boreas-device.md)).
+
+```json
+{ "name": "Living room Boreas unit" }
+```
+
+`name` is optional. Returns `{ "device": { "id": "...", "name": "...",
+"device_key": "..." } }` — `device_key` shown **once, in plaintext**, same
+as a household's own `api_key` at creation. This is a genuinely separate
+credential from that `api_key` — flash/configure it into the physical
+unit, not the household's own chat/HA token. Calling this again for a
+household that already has a device **replaces** its key.
+
+This doesn't switch the household onto the device — that's
+`heatpump_control` on the `/energy` endpoint above, a separate call, so
+provisioning a device ahead of switching a household over is harmless.
 
 ## What's not built yet
 
