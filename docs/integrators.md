@@ -134,14 +134,20 @@ Session-authed, same ownership check as the HA endpoint above.
   "room_temp_entity_id": "sensor.living_room_temperature",
   "min_temp_c": 18,
   "max_temp_c": 21,
-  "octopus_region": "C",
   "latitude": "51.5",
-  "longitude": "-0.12"
+  "longitude": "-0.12",
+  "tariff_type": "octopus_agile",
+  "octopus_region": "C"
 }
 ```
 
+`tariff_type` is `"octopus_agile"` (needs `octopus_region`) or `"manual"`
+(needs `manual_default_pence` and, optionally, `manual_off_peak_windows`)
+— see [`energy.md`](energy.md#enabling-it) for the full shape and why
+there are two.
+
 Technical setup for [heating optimization](energy.md) — this is the
-*installer's* side of it (which entities, which tariff region, which
+*installer's* side of it (which entities, which tariff, which
 comfort band), entirely separate from whether the household is actually
 *paying* for the add-on, which the homeowner controls from their own
 [billing portal](billing.md). Setting this doesn't start anything running

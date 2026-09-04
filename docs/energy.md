@@ -1,13 +1,29 @@
 # Energy optimization (heat pump, solar, EV charging)
 
 **Off by default, and each piece is independently optional.** A subsystem
-that uses Octopus Agile's half-hourly electricity prices and a Met Office
-weather forecast to decide when to preheat and when to coast a Samsung (or
-any) heat pump — the same idea as Homely, and priced to compete with it
-directly (see [`billing.md`](billing.md#pricing)) — plus two SolarEdge
-add-ons you can layer in once that hardware exists: live solar surplus
-overriding the heat pump schedule ("free heat beats cheap heat"), and
-solar-surplus-first EV charging.
+that uses live electricity prices and a Met Office weather forecast to
+decide when to preheat and when to coast a Samsung (or any) heat pump —
+the same idea as Homely, and priced to compete with it directly (see
+[`billing.md`](billing.md#pricing)) — plus two SolarEdge add-ons you can
+layer in once that hardware exists: live solar surplus overriding the
+heat pump schedule ("free heat beats cheap heat"), and solar-surplus-first
+EV charging.
+
+**Two ways to price the plan, per household**, since Homely's own claim is
+"works with all tariffs" and matching that honestly needs both:
+
+- **Octopus Agile** — live, half-hourly, fully automatic. Octopus is the
+  only major UK supplier with a public, free API for genuinely dynamic
+  pricing, so this is the "best" mode where it's available.
+- **Any other supplier, manually** — the installer enters the household's
+  actual tariff instead: a flat day rate, plus optional cheaper time-of-use
+  windows (Economy 7/10, or whatever off-peak hours the tariff actually
+  has). E.ON, ScottishPower, EDF, British Gas, OVO — none of them publish a
+  live-pricing API the way Octopus does, so there's nothing to pull live;
+  the optimizer schedules against the entered schedule instead, same
+  algorithm, just without reacting to price changes there aren't any of.
+  See [households.ts's `HouseholdTariff`](../cloudflare/src/households.ts)
+  and [`manualTariff.ts`](../cloudflare/src/manualTariff.ts).
 
 **Heat pump scheduling is per-household and billed as an add-on**
 (`billing.md`); solar and EV charging are still single-tenant/global,
@@ -27,7 +43,10 @@ can ever happen."
 This is a **deterministic algorithm**, not an LLM making a judgment call
 each cycle. Every 30 minutes (a Cloudflare Cron Trigger), the Worker:
 
-1. Fetches the next 24h of Octopus Agile half-hourly prices.
+1. Fetches the next 24h of prices — Octopus Agile's live half-hourly rates,
+   or synthesized half-hourly slots from the household's manually entered
+   schedule if it's on a different tariff (see above) — the same shape
+   either way, so every step after this one doesn't care which.
 2. Fetches an hourly outside-temperature forecast from Met Office.
 3. Ranks each price slot by **price ÷ estimated heat pump efficiency**, not
    raw price — a heat pump's COP (coefficient of performance) drops as it
@@ -151,13 +170,19 @@ Home Assistant profile (click your name, bottom left) → **Security** →
 Worker secrets) — this feature reuses whichever Home Assistant connection
 the household already has for device control, it doesn't need its own.
 
-### 3. Your Octopus Agile region letter
+### 3. Your tariff
 
-A single letter, A–P, for your electricity distribution area — find it on
-your Octopus account page, or by looking up your postcode against
-[Octopus's regions](https://octopus.energy/agile/). Per-household — set via
-the integrator dashboard (below). (Agile rate data itself is public — no
-Octopus API key needed.)
+**On Octopus Agile:** a single letter, A–P, for your electricity
+distribution area — find it on your Octopus account page, or by looking up
+your postcode against [Octopus's regions](https://octopus.energy/agile/).
+(Agile rate data itself is public — no Octopus API key needed.)
+
+**On any other supplier:** your tariff's rates instead — the flat day rate
+in pence/kWh, plus the start/end times and rate of any cheaper off-peak
+window(s) it has (Economy 7 is typically one ~7h overnight window; a plain
+fixed-rate tariff has none — just the flat rate). Check your bill or your
+supplier's app for the exact numbers. Both set per-household via the
+integrator dashboard (below).
 
 ### 4. A Met Office DataHub API key
 
@@ -213,18 +238,41 @@ secrets:
 
 ```
 POST /integrator/households/:id/energy
+
+# On Octopus Agile:
 {
   "heatpump_entity_id": "climate.living_room_heat_pump",
   "room_temp_entity_id": "sensor.living_room_temperature",
   "min_temp_c": 18,
   "max_temp_c": 21,
-  "octopus_region": "C",
   "latitude": "51.5",
-  "longitude": "-0.12"
+  "longitude": "-0.12",
+  "tariff_type": "octopus_agile",
+  "octopus_region": "C"
+}
+
+# On any other supplier:
+{
+  "heatpump_entity_id": "climate.living_room_heat_pump",
+  "room_temp_entity_id": "sensor.living_room_temperature",
+  "min_temp_c": 18,
+  "max_temp_c": 21,
+  "latitude": "51.5",
+  "longitude": "-0.12",
+  "tariff_type": "manual",
+  "manual_default_pence": 28.5,
+  "manual_off_peak_windows": [{ "start": "00:30", "end": "07:30", "pence": 15.0 }]
 }
 ```
 
-The dashboard page has a form for this per household — no `curl` needed.
+`manual_off_peak_windows` can be an empty array for a plain flat-rate
+tariff, or list more than one window for something like Economy 10. A
+window's `start`/`end` are local (UK clock) time, `"HH:MM"`, and correctly
+handle the BST/GMT change; a window can wrap past midnight (e.g.
+`"23:00"`–`"06:00"`).
+
+The dashboard page has a form for this per household (a dropdown picks the
+tariff type, switching which fields show) — no `curl` needed.
 Setting this wires up the *how*; whether a household is actually billed to
 run it is entirely separate (the homeowner subscribes to the add-on from
 their own [billing portal](billing.md), `GET /portal`) — see
@@ -330,6 +378,12 @@ curl https://<your-worker-url>/energy/status -H "Authorization: Bearer <ROSE_API
 
 ## Known limitations / future work
 
+- **A manual tariff is only as accurate as what was entered, and never
+  updates itself.** Unlike Octopus Agile's live API, nothing checks a
+  manually entered rate against reality — if the household changes tariff,
+  or the supplier changes their rates, the schedule silently keeps
+  optimizing against stale numbers until someone updates it via the
+  dashboard. No expiry warning or reminder is built yet.
 - **No real thermal model.** The optimizer doesn't know your house's
   heat-loss rate or how long a "coast" period actually holds temperature —
   it's a price/efficiency heuristic, not a simulation. A real improvement

@@ -413,13 +413,28 @@ export const DASHBOARD_HTML = `<!doctype html>
         '<input type="number" class="energy-mintemp" placeholder="18" required>' +
         '<label>Maximum comfort temperature (°C)</label>' +
         '<input type="number" class="energy-maxtemp" placeholder="21" required>' +
-        '<label>Octopus Agile region letter (A-P)</label>' +
-        '<input type="text" class="energy-region" placeholder="C" maxlength="1" required>' +
         '<label>Site latitude</label>' +
         '<input type="text" class="energy-lat" placeholder="51.5" required>' +
         '<label>Site longitude</label>' +
         '<input type="text" class="energy-lon" placeholder="-0.12" required>' +
-        '<button type="submit">Save heating config</button>' +
+        '<label>Electricity tariff</label>' +
+        '<select class="energy-tariff-type">' +
+        '<option value="octopus_agile">Octopus Agile (live half-hourly pricing)</option>' +
+        '<option value="manual">Any other supplier (enter the tariff manually)</option>' +
+        '</select>' +
+        '<div class="energy-agile-fields">' +
+        '<label>Octopus Agile region letter (A-P)</label>' +
+        '<input type="text" class="energy-region" placeholder="C" maxlength="1">' +
+        '</div>' +
+        '<div class="energy-manual-fields hidden-form">' +
+        '<p class="sub" style="margin:8px 0 0;">For any supplier without a live pricing API — a flat day rate, plus optional cheaper time-of-use windows (e.g. Economy 7). Leave the windows empty for a plain flat-rate tariff.</p>' +
+        '<label>Flat/day rate (pence per kWh)</label>' +
+        '<input type="number" step="0.01" class="energy-default-pence" placeholder="28.5">' +
+        '<label>Off-peak windows (optional)</label>' +
+        '<div class="energy-windows"></div>' +
+        '<button type="button" class="secondary energy-add-window" style="margin-top:6px;">+ Add off-peak window</button>' +
+        '</div>' +
+        '<button type="submit" style="margin-top:16px;">Save heating config</button>' +
         '<div class="status energy-status"></div>';
       wrap.appendChild(energyForm);
 
@@ -427,21 +442,67 @@ export const DASHBOARD_HTML = `<!doctype html>
         energyForm.classList.toggle('hidden-form');
       });
 
+      var tariffTypeSelect = energyForm.querySelector('.energy-tariff-type');
+      var agileFields = energyForm.querySelector('.energy-agile-fields');
+      var manualFields = energyForm.querySelector('.energy-manual-fields');
+      var windowsContainer = energyForm.querySelector('.energy-windows');
+
+      tariffTypeSelect.addEventListener('change', function () {
+        var isManual = tariffTypeSelect.value === 'manual';
+        agileFields.classList.toggle('hidden-form', isManual);
+        manualFields.classList.toggle('hidden-form', !isManual);
+      });
+
+      function addOffPeakWindowRow() {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex; gap:6px; align-items:center; margin-top:6px;';
+        row.innerHTML =
+          '<input type="text" class="window-start" placeholder="00:30" style="flex:1;">' +
+          '<input type="text" class="window-end" placeholder="07:30" style="flex:1;">' +
+          '<input type="number" step="0.01" class="window-pence" placeholder="15.0" style="flex:1;">' +
+          '<button type="button" class="secondary window-remove" style="padding:6px 10px;">✕</button>';
+        row.querySelector('.window-remove').addEventListener('click', function () {
+          row.remove();
+        });
+        windowsContainer.appendChild(row);
+      }
+
+      energyForm.querySelector('.energy-add-window').addEventListener('click', addOffPeakWindowRow);
+
       energyForm.addEventListener('submit', function (e) {
         e.preventDefault();
         var energyStatus = energyForm.querySelector('.energy-status');
+
+        var body = {
+          heatpump_entity_id: energyForm.querySelector('.energy-heatpump').value.trim(),
+          room_temp_entity_id: energyForm.querySelector('.energy-roomtemp').value.trim(),
+          min_temp_c: Number(energyForm.querySelector('.energy-mintemp').value),
+          max_temp_c: Number(energyForm.querySelector('.energy-maxtemp').value),
+          latitude: energyForm.querySelector('.energy-lat').value.trim(),
+          longitude: energyForm.querySelector('.energy-lon').value.trim(),
+          tariff_type: tariffTypeSelect.value
+        };
+
+        if (tariffTypeSelect.value === 'manual') {
+          body.manual_default_pence = Number(energyForm.querySelector('.energy-default-pence').value);
+          body.manual_off_peak_windows = Array.prototype.map.call(
+            windowsContainer.querySelectorAll('div'),
+            function (row) {
+              return {
+                start: row.querySelector('.window-start').value.trim(),
+                end: row.querySelector('.window-end').value.trim(),
+                pence: Number(row.querySelector('.window-pence').value)
+              };
+            }
+          );
+        } else {
+          body.octopus_region = energyForm.querySelector('.energy-region').value.trim().toUpperCase();
+        }
+
         setStatus(energyStatus, 'Saving…', 'muted');
         api('/integrator/households/' + encodeURIComponent(h.id) + '/energy', {
           method: 'POST',
-          body: JSON.stringify({
-            heatpump_entity_id: energyForm.querySelector('.energy-heatpump').value.trim(),
-            room_temp_entity_id: energyForm.querySelector('.energy-roomtemp').value.trim(),
-            min_temp_c: Number(energyForm.querySelector('.energy-mintemp').value),
-            max_temp_c: Number(energyForm.querySelector('.energy-maxtemp').value),
-            octopus_region: energyForm.querySelector('.energy-region').value.trim().toUpperCase(),
-            latitude: energyForm.querySelector('.energy-lat').value.trim(),
-            longitude: energyForm.querySelector('.energy-lon').value.trim()
-          })
+          body: JSON.stringify(body)
         }).then(function (result) {
           if (!result.ok) {
             setStatus(energyStatus, result.data.error || 'failed to save', 'error');
