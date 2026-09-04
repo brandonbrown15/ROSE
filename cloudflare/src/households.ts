@@ -327,21 +327,35 @@ export type HouseholdTariff =
 
 /** Which direction the climate optimizer should push toward on a cheap
  * slot — 'heat' (a heat pump: preheat toward max, safety floor when the
- * room's too cold) or 'cool' (an AC unit: pre-cool toward min, safety
- * ceiling when the room's too hot). Home Assistant represents both as the
- * same `climate.*` entity/`climate.set_temperature` service — this is
- * purely about which way energy.ts's optimizer reasons about them. See
- * migration 0010's comment. */
-export type HvacMode = "heat" | "cool";
+ * room's too cold), 'cool' (an AC unit: pre-cool toward min, safety
+ * ceiling when the room's too hot), or 'auto' (energy.ts decides heat vs.
+ * cool itself each cycle from outdoor temperature — see migration 0011's
+ * comment and energy.ts's resolveEffectiveHvacMode). Home Assistant
+ * represents heat pumps and AC units as the same `climate.*` entity/
+ * `climate.set_temperature` service either way — this is purely about
+ * which way energy.ts's optimizer reasons about them. See migration
+ * 0010's comment. */
+export type HvacMode = "heat" | "cool" | "auto";
 
 export interface HouseholdEnergyConfig {
   heatpumpEntityId: string;
   roomTempEntityId: string;
   minTempC: number;
   maxTempC: number;
+  // Purely for display/audit in the dashboard — null for a household
+  // configured before postcode-based setup existed (migration 0011), or
+  // if postcodes.io was ever bypassed. metOfficeLatitude/Longitude below
+  // remain the only fields anything at runtime actually reads.
+  postcode: string | null;
   metOfficeLatitude: string;
   metOfficeLongitude: string;
   hvacMode: HvacMode;
+  // Only meaningful when hvacMode is 'auto' — the hysteresis band
+  // energy.ts switches heat/cool across. Always present (defaulted in SQL)
+  // even for 'heat'/'cool' households, so nothing has to special-case a
+  // missing value.
+  autoHeatBelowC: number;
+  autoCoolAboveC: number;
   tariff: HouseholdTariff;
 }
 
@@ -350,9 +364,12 @@ interface HouseholdEnergyRow {
   room_temp_entity_id: string | null;
   heating_min_temp_c: number | null;
   heating_max_temp_c: number | null;
+  postcode: string | null;
   met_office_latitude: string | null;
   met_office_longitude: string | null;
   hvac_mode: string;
+  hvac_auto_heat_below_c: number;
+  hvac_auto_cool_above_c: number;
   tariff_type: string;
   octopus_region: string | null;
   manual_tariff_default_pence: number | null;
@@ -407,15 +424,19 @@ function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | nul
     roomTempEntityId: row.room_temp_entity_id,
     minTempC: row.heating_min_temp_c,
     maxTempC: row.heating_max_temp_c,
+    postcode: row.postcode,
     metOfficeLatitude: row.met_office_latitude,
     metOfficeLongitude: row.met_office_longitude,
-    hvacMode: row.hvac_mode === "cool" ? "cool" : "heat",
+    hvacMode: row.hvac_mode === "cool" ? "cool" : row.hvac_mode === "auto" ? "auto" : "heat",
+    autoHeatBelowC: row.hvac_auto_heat_below_c,
+    autoCoolAboveC: row.hvac_auto_cool_above_c,
     tariff,
   };
 }
 
 const ENERGY_ROW_COLUMNS = `heatpump_entity_id, room_temp_entity_id, heating_min_temp_c, heating_max_temp_c,
-            met_office_latitude, met_office_longitude, hvac_mode, tariff_type, octopus_region,
+            postcode, met_office_latitude, met_office_longitude, hvac_mode,
+            hvac_auto_heat_below_c, hvac_auto_cool_above_c, tariff_type, octopus_region,
             manual_tariff_default_pence, manual_tariff_off_peak_json`;
 
 /** A household's heating optimization config, or null if any required
@@ -445,8 +466,9 @@ export async function setHouseholdEnergyConfig(
   if (!config) {
     await env.DB.prepare(
       `UPDATE households SET heatpump_entity_id = NULL, room_temp_entity_id = NULL, heating_min_temp_c = NULL,
-              heating_max_temp_c = NULL, met_office_latitude = NULL, met_office_longitude = NULL,
-              hvac_mode = 'heat', tariff_type = 'octopus_agile', octopus_region = NULL,
+              heating_max_temp_c = NULL, postcode = NULL, met_office_latitude = NULL, met_office_longitude = NULL,
+              hvac_mode = 'heat', hvac_auto_state = 'heat', hvac_auto_heat_below_c = 18, hvac_auto_cool_above_c = 24,
+              tariff_type = 'octopus_agile', octopus_region = NULL,
               manual_tariff_default_pence = NULL, manual_tariff_off_peak_json = NULL
        WHERE id = ?1`
     )
@@ -461,24 +483,45 @@ export async function setHouseholdEnergyConfig(
 
   await env.DB.prepare(
     `UPDATE households SET heatpump_entity_id = ?1, room_temp_entity_id = ?2, heating_min_temp_c = ?3,
-            heating_max_temp_c = ?4, met_office_latitude = ?5, met_office_longitude = ?6, hvac_mode = ?7,
-            tariff_type = ?8, octopus_region = ?9, manual_tariff_default_pence = ?10, manual_tariff_off_peak_json = ?11
-     WHERE id = ?12`
+            heating_max_temp_c = ?4, postcode = ?5, met_office_latitude = ?6, met_office_longitude = ?7,
+            hvac_mode = ?8, hvac_auto_heat_below_c = ?9, hvac_auto_cool_above_c = ?10,
+            tariff_type = ?11, octopus_region = ?12, manual_tariff_default_pence = ?13, manual_tariff_off_peak_json = ?14
+     WHERE id = ?15`
   )
     .bind(
       config.heatpumpEntityId,
       config.roomTempEntityId,
       config.minTempC,
       config.maxTempC,
+      config.postcode,
       config.metOfficeLatitude,
       config.metOfficeLongitude,
       config.hvacMode,
+      config.autoHeatBelowC,
+      config.autoCoolAboveC,
       config.tariff.type,
       octopusRegion,
       manualDefaultPence,
       manualOffPeakJson,
       householdId
     )
+    .run();
+}
+
+/** The sticky side of the 'auto' hysteresis band a household is currently
+ * on — see migration 0011's comment and energy.ts's
+ * resolveEffectiveHvacMode. Meaningless (and unused) for a household whose
+ * hvacMode isn't 'auto'. */
+export async function getHouseholdHvacAutoState(env: Env, householdId: string): Promise<"heat" | "cool"> {
+  const row = await env.DB.prepare(`SELECT hvac_auto_state FROM households WHERE id = ?1`)
+    .bind(householdId)
+    .first<{ hvac_auto_state: string }>();
+  return row?.hvac_auto_state === "cool" ? "cool" : "heat";
+}
+
+export async function setHouseholdHvacAutoState(env: Env, householdId: string, state: "heat" | "cool"): Promise<void> {
+  await env.DB.prepare(`UPDATE households SET hvac_auto_state = ?1 WHERE id = ?2`)
+    .bind(state, householdId)
     .run();
 }
 

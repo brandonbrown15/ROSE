@@ -30,6 +30,7 @@ import {
   updateSubscriptionStatusBySubscriptionId,
   verifyHouseholdPin,
 } from "./households";
+import { geocodePostcode } from "./postcodes";
 import {
   clearSessionCookie,
   createIntegrator,
@@ -346,9 +347,10 @@ async function handleSetHouseholdEnergy(
     room_temp_entity_id?: string;
     min_temp_c?: number;
     max_temp_c?: number;
-    latitude?: string;
-    longitude?: string;
+    postcode?: string;
     hvac_mode?: string;
+    auto_heat_below_c?: number;
+    auto_cool_above_c?: number;
     tariff_type?: string;
     octopus_region?: string;
     manual_default_pence?: number;
@@ -369,13 +371,48 @@ async function handleSetHouseholdEnergy(
   if (typeof body.min_temp_c !== "number" || typeof body.max_temp_c !== "number" || body.min_temp_c >= body.max_temp_c) {
     return jsonError("'min_temp_c' and 'max_temp_c' are required numbers, with min_temp_c < max_temp_c", 400);
   }
-  if (typeof body.latitude !== "string" || typeof body.longitude !== "string" || !body.latitude || !body.longitude) {
-    return jsonError("'latitude' and 'longitude' are required", 400);
+  if (typeof body.postcode !== "string" || !body.postcode.trim()) {
+    return jsonError("'postcode' is required", 400);
   }
-  if (body.hvac_mode !== undefined && body.hvac_mode !== "heat" && body.hvac_mode !== "cool") {
-    return jsonError("'hvac_mode' must be 'heat' or 'cool' if given", 400);
+  if (
+    body.hvac_mode !== undefined &&
+    body.hvac_mode !== "heat" &&
+    body.hvac_mode !== "cool" &&
+    body.hvac_mode !== "auto"
+  ) {
+    return jsonError("'hvac_mode' must be 'heat', 'cool', or 'auto' if given", 400);
   }
-  const hvacMode = body.hvac_mode === "cool" ? "cool" : "heat";
+  const hvacMode = body.hvac_mode === "cool" || body.hvac_mode === "auto" ? body.hvac_mode : "heat";
+
+  // Only meaningful in 'auto' mode (see migration 0011), but always
+  // validated/stored so switching a household into 'auto' later doesn't
+  // need a second request — sensible UK defaults if not given.
+  let autoHeatBelowC = 18;
+  let autoCoolAboveC = 24;
+  if (body.auto_heat_below_c !== undefined) {
+    if (typeof body.auto_heat_below_c !== "number") {
+      return jsonError("'auto_heat_below_c' must be a number if given", 400);
+    }
+    autoHeatBelowC = body.auto_heat_below_c;
+  }
+  if (body.auto_cool_above_c !== undefined) {
+    if (typeof body.auto_cool_above_c !== "number") {
+      return jsonError("'auto_cool_above_c' must be a number if given", 400);
+    }
+    autoCoolAboveC = body.auto_cool_above_c;
+  }
+  if (autoHeatBelowC >= autoCoolAboveC) {
+    return jsonError("'auto_heat_below_c' must be less than 'auto_cool_above_c'", 400);
+  }
+
+  // Resolved once here, at save time, rather than by the cron every 30
+  // minutes — see postcodes.ts's comment.
+  let geocoded: Awaited<ReturnType<typeof geocodePostcode>>;
+  try {
+    geocoded = await geocodePostcode(body.postcode);
+  } catch (err) {
+    return jsonError(err instanceof Error ? err.message : "failed to resolve postcode", 400);
+  }
 
   // Octopus Agile's live pricing API, or a manually entered flat/time-of-use
   // schedule for every other supplier — see docs/energy.md for why there's
@@ -407,13 +444,16 @@ async function handleSetHouseholdEnergy(
     roomTempEntityId: body.room_temp_entity_id,
     minTempC: body.min_temp_c,
     maxTempC: body.max_temp_c,
-    metOfficeLatitude: body.latitude,
-    metOfficeLongitude: body.longitude,
+    postcode: geocoded.postcode,
+    metOfficeLatitude: geocoded.latitude,
+    metOfficeLongitude: geocoded.longitude,
     hvacMode,
+    autoHeatBelowC,
+    autoCoolAboveC,
     tariff,
   });
 
-  return jsonOk({ ok: true });
+  return jsonOk({ ok: true, resolved_postcode: geocoded.postcode });
 }
 
 const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;

@@ -15,10 +15,19 @@ pump and an AC unit the same way (a `climate.*` entity,
 sensitive: cheap slots should push a heat pump's target **up** (preheat)
 but an AC's target **down** (pre-cool), and the safety override needs to
 boost heating when the room's too cold but boost cooling when it's too
-hot. A household's `hvac_mode` (`"heat"` or `"cool"`, set alongside its
-other heat pump/AC config — see [Enabling it](#enabling-it)) tells
-`energy.ts` which direction to reason in. Defaults to `"heat"` — every
-household configured before this existed keeps behaving exactly as it did.
+hot. A household's `hvac_mode` (`"heat"`, `"cool"`, or `"auto"`, set
+alongside its other heat pump/AC config — see [Enabling it](#enabling-it))
+tells `energy.ts` which direction to reason in. Defaults to `"heat"` —
+every household configured before this existed keeps behaving exactly as
+it did.
+
+**`"auto"` switches itself between the two by outdoor temperature** — the
+realistic case for most UK homes, where AC is only needed a handful of
+days a year and nobody wants to remember to flip a setting for it. Each
+cycle checks the current/forecast outdoor temperature against two
+configurable thresholds (defaulting to 18°C/24°C) with hysteresis between
+them, so a borderline day doesn't flip the household back and forth —
+see [Known limitations](#known-limitations--future-work).
 
 **Two ways to price the plan, per household**, since Homely's own claim is
 "works with all tariffs" and matching that honestly needs both:
@@ -205,13 +214,32 @@ handful of households before you'd need to think about the free tier's
 limit). Becomes the `MET_OFFICE_API_KEY` Worker secret — one account,
 shared across every household, since it's your own developer account
 rather than something each homeowner has. Each household's own forecast
-**latitude/longitude** is set per-household via the dashboard (below).
+location is set per-household via the dashboard (below) as a **UK
+postcode** — the Worker resolves it to the lat/long the Met Office forecast
+and this "auto" mode's temperature reading actually need, via
+[postcodes.io](https://postcodes.io/) (free, no key, official ONS data), so
+nobody has to go find their own decimal coordinates.
 
 ### 5. Your heat pump's entity ID and a room temperature sensor
 
 In Home Assistant, **Developer Tools → States**, find the heat pump's
 `climate.*` entity ID and a `sensor.*` entity reporting the room's current
 temperature. Per-household, set via the dashboard.
+
+**How that entity gets there is entirely between your heat pump and Home
+Assistant — ROSE never talks to the manufacturer directly, only to
+whatever HA already exposes as a `climate.*` entity.** For a Samsung EHS/HE/HT
+heat pump, that's typically the genuine Samsung **MIM-B19N** module, which
+sits on the outdoor unit and bridges Samsung's proprietary NASA (R1/R2) bus
+to standard **Modbus RTU over RS485** — configured in HA via its built-in
+Modbus integration, or a community component built specifically for the
+MIM-B19N register set. One thing worth checking on-site: each indoor unit
+needs **"Use of central control" (SEG5) set to "Use (1)"**, or the module
+can read status but can't send control commands. Other manufacturers vary —
+Daikin, Mitsubishi Ecodan, Vaillant, and Nibe units are more commonly
+integrated via their own cloud APIs (MELCloud, sensoNET, Uplink, etc.)
+rather than a local bus — but whichever protocol sits underneath, once HA
+exposes a `climate.*` entity for it, it looks identical to ROSE.
 
 ### 6. Decide the comfort band
 
@@ -257,8 +285,7 @@ POST /integrator/households/:id/energy
   "room_temp_entity_id": "sensor.living_room_temperature",
   "min_temp_c": 18,
   "max_temp_c": 21,
-  "latitude": "51.5",
-  "longitude": "-0.12",
+  "postcode": "SW1A 1AA",
   "hvac_mode": "heat",
   "tariff_type": "octopus_agile",
   "octopus_region": "C"
@@ -270,20 +297,44 @@ POST /integrator/households/:id/energy
   "room_temp_entity_id": "sensor.living_room_temperature",
   "min_temp_c": 21,
   "max_temp_c": 25,
-  "latitude": "51.5",
-  "longitude": "-0.12",
+  "postcode": "SW1A 1AA",
   "hvac_mode": "cool",
   "tariff_type": "manual",
   "manual_default_pence": 28.5,
   "manual_off_peak_windows": [{ "start": "00:30", "end": "07:30", "pence": 15.0 }]
 }
+
+# Auto — switches itself between heating and cooling by outdoor temperature:
+{
+  "heatpump_entity_id": "climate.living_room_heat_pump",
+  "room_temp_entity_id": "sensor.living_room_temperature",
+  "min_temp_c": 18,
+  "max_temp_c": 21,
+  "postcode": "SW1A 1AA",
+  "hvac_mode": "auto",
+  "auto_heat_below_c": 18,
+  "auto_cool_above_c": 24,
+  "tariff_type": "octopus_agile",
+  "octopus_region": "C"
+}
 ```
 
+`postcode` is resolved server-side, once, at save time — via
+[postcodes.io](https://postcodes.io/), so a `curl` (or the dashboard form)
+only ever needs a UK postcode, never decimal coordinates. The response
+echoes back `resolved_postcode` in postcodes.io's own normalized casing, so
+you can confirm it matched what you meant. A `400` means it didn't look
+like a real UK postcode.
+
 `hvac_mode` defaults to `"heat"` if omitted — matching every household
-configured before this existed. It only flips which direction the
-optimizer pushes toward (see the top of this doc); it never switches the
-unit itself between heating and cooling mode — that's still on the
-household's own thermostat/app, same as any reversible heat pump today.
+configured before this existed. `"heat"`/`"cool"` only flip which direction
+the optimizer pushes toward (see the top of this doc); `"auto"` decides
+that itself each cycle from outdoor temperature, via `auto_heat_below_c`/
+`auto_cool_above_c` (both default to 18/24 if omitted, but only actually
+matter in `"auto"` mode). None of the three ever switches the unit itself
+between heating and cooling mode — that's still on the household's own
+thermostat/app, same as any reversible heat pump today; ROSE only ever
+pushes a target temperature within whatever mode the unit's already in.
 
 `manual_off_peak_windows` can be an empty array for a plain flat-rate
 tariff, or list more than one window for something like Economy 10. A
@@ -409,7 +460,17 @@ curl https://<your-worker-url>/energy/status -H "Authorization: Bearer <ROSE_API
   `hvac_mode` only tells the optimizer which direction to push the target
   temperature — a reversible heat pump's own mode switch (or an AC's
   on/off relative to a furnace) is still on the household's own
-  thermostat or existing automations.
+  thermostat or existing automations. `"auto"` decides *which direction to
+  reason in*, not which physical mode the unit is in — if the unit itself
+  is still set to heat-only, `"auto"` deciding "cool" won't do anything
+  useful. Worth pairing `"auto"` with a unit/HA automation that can
+  actually switch physical mode, once one exists.
+- **`"auto"` reacts to the current/near-term reading, not a forecast.**
+  It doesn't look ahead the way the price schedule does (e.g. pre-empting
+  a heatwave starting tomorrow) — each cycle just checks where today's
+  reading sits against the two thresholds. Combined with the 30-minute
+  cycle and the hysteresis band, this means a mode switch can lag the
+  actual weather by up to that cycle length.
 - **A manual tariff is only as accurate as what was entered, and never
   updates itself.** Unlike Octopus Agile's live API, nothing checks a
   manually entered rate against reality — if the household changes tariff,

@@ -409,7 +409,15 @@ export const DASHBOARD_HTML = `<!doctype html>
         '<select class="energy-hvac-mode">' +
         '<option value="heat">Heating (heat pump)</option>' +
         '<option value="cool">Cooling (air conditioning)</option>' +
+        '<option value="auto">Auto — switch by outdoor temperature</option>' +
         '</select>' +
+        '<div class="energy-auto-fields hidden-form">' +
+        '<p class="sub" style="margin:4px 0 0;">Switches itself between heating and cooling as the weather changes — most UK homes only need cooling a handful of days a year, so nobody has to remember to flip it. Starts heating; moves to cooling once the outdoor temperature is above the top threshold, and back once it\'s below the bottom one, so a borderline day doesn\'t flip it back and forth.</p>' +
+        '<label>Switch to heating below (°C)</label>' +
+        '<input type="number" class="energy-auto-heat-below" placeholder="18">' +
+        '<label>Switch to cooling above (°C)</label>' +
+        '<input type="number" class="energy-auto-cool-above" placeholder="24">' +
+        '</div>' +
         '<label>Climate entity ID</label>' +
         '<input type="text" class="energy-heatpump" placeholder="climate.living_room_heat_pump" required>' +
         '<label>Room temperature sensor entity ID</label>' +
@@ -418,10 +426,8 @@ export const DASHBOARD_HTML = `<!doctype html>
         '<input type="number" class="energy-mintemp" placeholder="18" required>' +
         '<label>Maximum comfort temperature (°C)</label>' +
         '<input type="number" class="energy-maxtemp" placeholder="21" required>' +
-        '<label>Site latitude</label>' +
-        '<input type="text" class="energy-lat" placeholder="51.5" required>' +
-        '<label>Site longitude</label>' +
-        '<input type="text" class="energy-lon" placeholder="-0.12" required>' +
+        '<label>Postcode</label>' +
+        '<input type="text" class="energy-postcode" placeholder="SW1A 1AA" required>' +
         '<label>Electricity tariff</label>' +
         '<select class="energy-tariff-type">' +
         '<option value="octopus_agile">Octopus Agile (live half-hourly pricing)</option>' +
@@ -451,11 +457,17 @@ export const DASHBOARD_HTML = `<!doctype html>
       var agileFields = energyForm.querySelector('.energy-agile-fields');
       var manualFields = energyForm.querySelector('.energy-manual-fields');
       var windowsContainer = energyForm.querySelector('.energy-windows');
+      var hvacModeSelect = energyForm.querySelector('.energy-hvac-mode');
+      var autoFields = energyForm.querySelector('.energy-auto-fields');
 
       tariffTypeSelect.addEventListener('change', function () {
         var isManual = tariffTypeSelect.value === 'manual';
         agileFields.classList.toggle('hidden-form', isManual);
         manualFields.classList.toggle('hidden-form', !isManual);
+      });
+
+      hvacModeSelect.addEventListener('change', function () {
+        autoFields.classList.toggle('hidden-form', hvacModeSelect.value !== 'auto');
       });
 
       function addOffPeakWindowRow() {
@@ -483,11 +495,17 @@ export const DASHBOARD_HTML = `<!doctype html>
           room_temp_entity_id: energyForm.querySelector('.energy-roomtemp').value.trim(),
           min_temp_c: Number(energyForm.querySelector('.energy-mintemp').value),
           max_temp_c: Number(energyForm.querySelector('.energy-maxtemp').value),
-          latitude: energyForm.querySelector('.energy-lat').value.trim(),
-          longitude: energyForm.querySelector('.energy-lon').value.trim(),
-          hvac_mode: energyForm.querySelector('.energy-hvac-mode').value,
+          postcode: energyForm.querySelector('.energy-postcode').value.trim(),
+          hvac_mode: hvacModeSelect.value,
           tariff_type: tariffTypeSelect.value
         };
+
+        if (hvacModeSelect.value === 'auto') {
+          var autoHeatBelow = energyForm.querySelector('.energy-auto-heat-below').value.trim();
+          var autoCoolAbove = energyForm.querySelector('.energy-auto-cool-above').value.trim();
+          if (autoHeatBelow) body.auto_heat_below_c = Number(autoHeatBelow);
+          if (autoCoolAbove) body.auto_cool_above_c = Number(autoCoolAbove);
+        }
 
         if (tariffTypeSelect.value === 'manual') {
           body.manual_default_pence = Number(energyForm.querySelector('.energy-default-pence').value);
@@ -514,7 +532,8 @@ export const DASHBOARD_HTML = `<!doctype html>
             setStatus(energyStatus, result.data.error || 'failed to save', 'error');
             return;
           }
-          setStatus(energyStatus, 'Saved.', 'ok');
+          var resolved = result.data && result.data.resolved_postcode;
+          setStatus(energyStatus, resolved ? 'Saved. (' + resolved + ')' : 'Saved.', 'ok');
         }).catch(function (err) {
           setStatus(energyStatus, 'Could not reach ROSE. (' + err.message + ')', 'error');
         });

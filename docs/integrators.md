@@ -134,19 +134,25 @@ Session-authed, same ownership check as the HA endpoint above.
   "room_temp_entity_id": "sensor.living_room_temperature",
   "min_temp_c": 18,
   "max_temp_c": 21,
-  "latitude": "51.5",
-  "longitude": "-0.12",
+  "postcode": "SW1A 1AA",
   "hvac_mode": "heat",
   "tariff_type": "octopus_agile",
   "octopus_region": "C"
 }
 ```
 
-`hvac_mode` is `"heat"` (default if omitted) or `"cool"` — same
-`climate.*` entity mechanism either way, just flips which direction the
-optimizer pushes toward (heat pump vs. air conditioning — see
-[`energy.md`](energy.md)). `tariff_type` is `"octopus_agile"` (needs
-`octopus_region`) or `"manual"` (needs `manual_default_pence` and,
+`postcode` is a UK postcode — resolved server-side to a lat/long via
+[postcodes.io](https://postcodes.io/) (free, no key) at save time, `400` if
+it doesn't resolve. The response includes `resolved_postcode` in
+postcodes.io's own normalized casing so you can confirm it matched.
+
+`hvac_mode` is `"heat"` (default if omitted), `"cool"`, or `"auto"` — same
+`climate.*` entity mechanism either way. `"heat"`/`"cool"` just flip which
+direction the optimizer pushes toward (heat pump vs. air conditioning);
+`"auto"` decides that itself each cycle from outdoor temperature, via
+optional `auto_heat_below_c`/`auto_cool_above_c` (default 18/24) — see
+[`energy.md`](energy.md#enabling-it). `tariff_type` is `"octopus_agile"`
+(needs `octopus_region`) or `"manual"` (needs `manual_default_pence` and,
 optionally, `manual_off_peak_windows`) — see
 [`energy.md`](energy.md#enabling-it) for the full shape and why there are
 two.
