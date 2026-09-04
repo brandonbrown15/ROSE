@@ -212,13 +212,25 @@ short-term history  +  RELEVANT MEMORIES  ──▶  chat completion
 
 ## Persona / system prompt
 
-ROSE's personality and behavior guidance lives in `ROSE_PERSONA` in
-[`chat.ts`](../cloudflare/src/chat.ts) — a plain string, edited and deployed
-like any other code, not something managed from the OpenAI dashboard (ROSE
-calls the Chat Completions API with an inline prompt, not a hosted Prompt
-object). `buildSystemPrompt()` appends the person/memory guidance described
-above onto it per-request; the persona text itself doesn't need to know
-anything about memory scoping.
+ROSE's personality and behavior guidance lives in `ROSE_PERSONA_INTRO`/
+`ROSE_PERSONA_OUTRO` in [`chat.ts`](../cloudflare/src/chat.ts) — plain
+strings, edited and deployed like any other code, not something managed
+from the OpenAI dashboard (ROSE calls the Chat Completions API with an
+inline prompt, not a hosted Prompt object). `buildSystemPrompt()` appends
+the person/memory guidance described above per-request; the persona text
+itself doesn't need to know anything about memory scoping.
+
+The device-control paragraph in between those two is the one exception —
+it's one of two mutually exclusive strings (`DEVICE_CONTROL_GUIDANCE` /
+`NO_DEVICE_CONTROL_GUIDANCE`), chosen by `buildSystemPrompt()` based on
+whether Home Assistant is actually configured (`HA_URL`/`HA_TOKEN` set),
+the same check that decides whether `control_device` is offered as a tool
+at all. This matters more than it might look: prose describing what the
+model *should* do with a tool isn't the same as the tool actually being
+available, and a system prompt that unconditionally describes a PIN-gated
+unlock flow will get roleplayed confidently even with zero real capability
+behind it — asking for a PIN, then fabricating a "rejected" response, with
+no real tool call anywhere in the loop. Reproduced live, not theoretical.
 
 One thing intentionally left out: don't ask the model for a separate hidden
 "reasoning" section before its reply. There's no hidden channel in a plain
