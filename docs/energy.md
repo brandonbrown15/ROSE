@@ -29,6 +29,23 @@ configurable thresholds (defaulting to 18°C/24°C) with hysteresis between
 them, so a borderline day doesn't flip the household back and forth —
 see [Known limitations](#known-limitations--future-work).
 
+**Two ways to actually reach the heat pump, per household** — a
+household's `heatpump_control`:
+
+- **`"home_assistant"`** (default) — everything above, via a household's
+  own Home Assistant instance, as described throughout this page.
+- **`"boreas_device"`** — a standalone Boreas unit (planned hardware, see
+  [`boreas-device.md`](boreas-device.md)) instead of Home Assistant. Since
+  the device sits behind the household's own home network/NAT, the Worker
+  can't reach it directly the way it reaches a household's (publicly
+  tunnelled) Home Assistant instance — control flips to the device
+  periodically polling the Worker (`POST /device/checkin`) instead. See
+  [Standalone Boreas devices](#standalone-boreas-devices-heatpump_control-boreas_device)
+  below. Everything about *how the plan is computed* (price ranking,
+  weather, `hvac_mode`, safety override) is identical either way; only
+  where the room reading comes from and where the target temperature goes
+  differs.
+
 **Two ways to price the plan, per household**, since Homely's own claim is
 "works with all tariffs" and matching that honestly needs both:
 
@@ -317,6 +334,19 @@ POST /integrator/households/:id/energy
   "tariff_type": "octopus_agile",
   "octopus_region": "C"
 }
+
+# Standalone Boreas device instead of Home Assistant — no heatpump_entity_id/
+# room_temp_entity_id at all; the device's own registration stands in for both
+# (see "Standalone Boreas devices" below):
+{
+  "heatpump_control": "boreas_device",
+  "min_temp_c": 18,
+  "max_temp_c": 21,
+  "postcode": "SW1A 1AA",
+  "hvac_mode": "heat",
+  "tariff_type": "octopus_agile",
+  "octopus_region": "C"
+}
 ```
 
 `postcode` is resolved server-side, once, at save time — via
@@ -335,6 +365,16 @@ matter in `"auto"` mode). None of the three ever switches the unit itself
 between heating and cooling mode — that's still on the household's own
 thermostat/app, same as any reversible heat pump today; ROSE only ever
 pushes a target temperature within whatever mode the unit's already in.
+
+`heatpump_control` defaults to `"home_assistant"` if omitted — matching
+every household configured before this existed. Set it to `"boreas_device"`
+to switch a household onto a standalone device instead; `heatpump_entity_id`/
+`room_temp_entity_id` become optional (and are ignored if given) in that
+mode. Switching this doesn't provision the device itself — that's the
+separate call below — so setting `heatpump_control` to `"boreas_device"`
+before a device has ever checked in just means the cron computes a plan
+with nowhere to send it yet (see [Standalone Boreas
+devices](#standalone-boreas-devices-heatpump_control-boreas_device)).
 
 `manual_off_peak_windows` can be an empty array for a plain flat-rate
 tariff, or list more than one window for something like Economy 10. A
@@ -384,6 +424,55 @@ instead, when you opt in during setup — see
 "by hand" pattern applied elsewhere.
 
 Redeploy after setting secrets so the cron trigger picks them up.
+
+### Standalone Boreas devices (`heatpump_control: "boreas_device"`)
+
+**Planned hardware — see [`boreas-device.md`](boreas-device.md) for the
+full picture.** No physical unit exists yet; this is the Worker-side API
+it'll call, built ahead of the hardware so firmware work isn't also
+blocked on backend work.
+
+Provisioning a device is a separate call from setting `heatpump_control`
+above — same session-authed, ownership-checked pattern as the HA/energy
+endpoints:
+
+```
+POST /integrator/households/:id/device
+{ "name": "Living room Boreas unit" }   # optional
+
+→ { "device": { "id": "...", "name": "...", "device_key": "..." } }
+```
+
+`device_key` is shown **once, in plaintext** — same as a household's own
+`api_key` at creation (see [households.md](households.md)) — and is a
+genuinely separate credential from that `api_key`: a device sitting in a
+customer's consumer unit is a different physical-access risk than a phone
+or a cloud service, so a compromised device can't be used to authenticate
+as the household's chat/Home-Assistant client. Calling this again for a
+household that already has a device **replaces** its key — the old one
+stops working immediately.
+
+The device itself then polls, roughly on whatever interval its firmware
+decides (this doesn't dictate one yet):
+
+```
+POST /device/checkin
+Authorization: Bearer <device_key>
+{ "room_temp_c": 19.4 }
+
+→ { "target_temp_c": 21, "hvac_mode": "heat" }
+```
+
+This reports the device's own room-temperature reading (replacing what a
+`room_temp_entity_id` sensor would tell Home Assistant) and returns
+whatever the most recent 30-minute optimization cycle decided — the
+device is responsible for actually applying that via whichever local
+interface it has to the heat pump (RS485/Modbus, etc.); the Worker has no
+way to push to it directly, since it sits behind the household's own home
+network/NAT. Both fields come back `null` if nothing's been computed
+yet (the device polling before the household's first cron cycle, or
+before `heatpump_control` was ever switched to `"boreas_device"`) — treat
+that as "hold current state," not an error.
 
 ## Testing before you trust it
 
@@ -449,6 +538,13 @@ curl https://<your-worker-url>/energy/status -H "Authorization: Bearer <ROSE_API
 
 ## Known limitations / future work
 
+- **Standalone Boreas devices are Worker-side API only — no hardware or
+  firmware exists yet.** `heatpump_control: "boreas_device"` and
+  `POST /device/checkin` are real and tested, but nothing to actually run
+  them on has been built. See [`boreas-device.md`](boreas-device.md). Also
+  not decided yet: the actual device↔Worker wire protocol beyond plain
+  HTTPS/JSON, check-in frequency, and what happens (today: nothing —
+  no alerting) if a device goes offline for an extended period.
 - **Cooling mode ranks purely on price — no efficiency curve.** Heating's
   COP curve (`approximateCop`) models a heat pump getting less efficient
   as it gets colder outside; that shape (and the data behind it) doesn't

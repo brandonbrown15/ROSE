@@ -6,6 +6,7 @@ import {
   listHouseholdsReadyForEnergyOptimization,
   setHouseholdHvacAutoState,
 } from "./households";
+import { getDeviceRoomTempC, setPendingDeviceCommand } from "./devices";
 import { controlDevice, getEntityState } from "./homeAssistant";
 import { getManualTariffRates } from "./manualTariff";
 import { getAgileRates, type AgileRate } from "./octopus";
@@ -288,8 +289,14 @@ export async function runHeatPumpOptimization(
   const nowISO = new Date().toISOString();
   let applied = plan.find((s) => s.start <= nowISO && nowISO < s.end) ?? plan[0];
 
-  const ha = await getHouseholdHaConfig(env, householdId);
-  if (!ha) {
+  // Two control paths from here — see households.ts's HvacControlMode and
+  // docs/boreas-device.md. Both need the same room-temp read → safety
+  // override → apply-the-target shape; they differ only in where the
+  // reading comes from and how the target actually reaches the hardware.
+  // For 'home_assistant', the Worker holds one HA connection across both
+  // the read and the write below, rather than resolving it twice.
+  const ha = config.heatpumpControl === "home_assistant" ? await getHouseholdHaConfig(env, householdId) : null;
+  if (config.heatpumpControl === "home_assistant" && !ha) {
     // Configured (buildPlan ran) but no HA connection resolved for this
     // household right now — store the plan for /energy/status to show,
     // but there's nothing to actually control.
@@ -297,8 +304,22 @@ export async function runHeatPumpOptimization(
   }
 
   try {
-    const roomState = await getEntityState(ha, config.roomTempEntityId);
-    const roomTempC = Number(roomState.state);
+    let roomTempC: number;
+    if (config.heatpumpControl === "boreas_device") {
+      // Standalone device — no Home Assistant involved at all. Its last
+      // check-in (devices.ts) is the room reading; a device that's never
+      // checked in yet (null) just skips the safety override below, same
+      // as an unreachable HA sensor would.
+      const deviceRoomTempC = await getDeviceRoomTempC(env, householdId);
+      if (deviceRoomTempC === null) {
+        return { applied, plan };
+      }
+      roomTempC = deviceRoomTempC;
+    } else {
+      const roomState = await getEntityState(ha!, config.roomTempEntityId);
+      roomTempC = Number(roomState.state);
+    }
+
     // Safety floor (heating) / ceiling (cooling): if the room's already
     // outside the comfort band in the direction that matters for this
     // mode — too cold to heat, too hot to cool — override everything above
@@ -318,7 +339,16 @@ export async function runHeatPumpOptimization(
         reason: `safety override — room is ${roomTempC}°C, below the configured minimum`,
       };
     }
-    await controlDevice(ha, "climate", "set_temperature", config.heatpumpEntityId, { temperature: applied.targetTempC });
+
+    if (config.heatpumpControl === "boreas_device") {
+      // The Worker can't dial into the device (it's behind the
+      // household's own NAT) — store the command for the device to pick
+      // up on its next check-in (POST /device/checkin) instead of pushing
+      // it anywhere now.
+      await setPendingDeviceCommand(env, householdId, applied.targetTempC, effectiveHvacMode);
+    } else {
+      await controlDevice(ha!, "climate", "set_temperature", config.heatpumpEntityId, { temperature: applied.targetTempC });
+    }
   } catch (err) {
     console.error(`energy optimization: failed to read/set heat pump state for household ${householdId}`, err);
   }

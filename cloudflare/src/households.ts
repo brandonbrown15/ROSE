@@ -337,7 +337,26 @@ export type HouseholdTariff =
  * 0010's comment. */
 export type HvacMode = "heat" | "cool" | "auto";
 
+/** How energy.ts actually reads/controls the heat pump for this household —
+ * see migration 0012's comment and docs/boreas-device.md.
+ *
+ * 'home_assistant' (default — every household configured before this
+ * existed): the Worker reaches out to the household's own, publicly
+ * reachable Home Assistant instance (heatpumpEntityId/roomTempEntityId are
+ * HA entity IDs).
+ *
+ * 'boreas_device': a standalone Boreas unit behind the household's own
+ * home network/NAT — the Worker can never dial into it directly, so
+ * control flips to the device periodically polling the Worker instead
+ * (see devices.ts). heatpumpEntityId/roomTempEntityId are meaningless
+ * here; the device's own registration (devices.ts's BoreasDevice) stands
+ * in for both. */
+export type HvacControlMode = "home_assistant" | "boreas_device";
+
 export interface HouseholdEnergyConfig {
+  // Home Assistant entity IDs — only meaningful (and only required) when
+  // heatpumpControl is 'home_assistant'. Empty strings for a
+  // 'boreas_device' household; nothing reads them in that mode.
   heatpumpEntityId: string;
   roomTempEntityId: string;
   minTempC: number;
@@ -356,6 +375,7 @@ export interface HouseholdEnergyConfig {
   // missing value.
   autoHeatBelowC: number;
   autoCoolAboveC: number;
+  heatpumpControl: HvacControlMode;
   tariff: HouseholdTariff;
 }
 
@@ -370,6 +390,7 @@ interface HouseholdEnergyRow {
   hvac_mode: string;
   hvac_auto_heat_below_c: number;
   hvac_auto_cool_above_c: number;
+  heatpump_control: string;
   tariff_type: string;
   octopus_region: string | null;
   manual_tariff_default_pence: number | null;
@@ -395,9 +416,16 @@ function parseOffPeakWindows(json: string | null): OffPeakWindow[] {
 }
 
 function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | null {
+  const heatpumpControl: HvacControlMode = row.heatpump_control === "boreas_device" ? "boreas_device" : "home_assistant";
+
+  // heatpump_entity_id/room_temp_entity_id are Home Assistant specifics —
+  // required only in that control mode. A 'boreas_device' household's
+  // device registration (devices.ts) stands in for both instead, so
+  // there's nothing to require here. Location (Met Office lat/long) still
+  // matters either way — the price/weather plan doesn't depend on which
+  // control mode is doing the actual reading/writing.
   if (
-    !row.heatpump_entity_id ||
-    !row.room_temp_entity_id ||
+    (heatpumpControl === "home_assistant" && (!row.heatpump_entity_id || !row.room_temp_entity_id)) ||
     row.heating_min_temp_c === null ||
     row.heating_max_temp_c === null ||
     !row.met_office_latitude ||
@@ -420,8 +448,8 @@ function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | nul
   }
 
   return {
-    heatpumpEntityId: row.heatpump_entity_id,
-    roomTempEntityId: row.room_temp_entity_id,
+    heatpumpEntityId: row.heatpump_entity_id ?? "",
+    roomTempEntityId: row.room_temp_entity_id ?? "",
     minTempC: row.heating_min_temp_c,
     maxTempC: row.heating_max_temp_c,
     postcode: row.postcode,
@@ -430,13 +458,14 @@ function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | nul
     hvacMode: row.hvac_mode === "cool" ? "cool" : row.hvac_mode === "auto" ? "auto" : "heat",
     autoHeatBelowC: row.hvac_auto_heat_below_c,
     autoCoolAboveC: row.hvac_auto_cool_above_c,
+    heatpumpControl,
     tariff,
   };
 }
 
 const ENERGY_ROW_COLUMNS = `heatpump_entity_id, room_temp_entity_id, heating_min_temp_c, heating_max_temp_c,
             postcode, met_office_latitude, met_office_longitude, hvac_mode,
-            hvac_auto_heat_below_c, hvac_auto_cool_above_c, tariff_type, octopus_region,
+            hvac_auto_heat_below_c, hvac_auto_cool_above_c, heatpump_control, tariff_type, octopus_region,
             manual_tariff_default_pence, manual_tariff_off_peak_json`;
 
 /** A household's heating optimization config, or null if any required
@@ -468,6 +497,7 @@ export async function setHouseholdEnergyConfig(
       `UPDATE households SET heatpump_entity_id = NULL, room_temp_entity_id = NULL, heating_min_temp_c = NULL,
               heating_max_temp_c = NULL, postcode = NULL, met_office_latitude = NULL, met_office_longitude = NULL,
               hvac_mode = 'heat', hvac_auto_state = 'heat', hvac_auto_heat_below_c = 18, hvac_auto_cool_above_c = 24,
+              heatpump_control = 'home_assistant',
               tariff_type = 'octopus_agile', octopus_region = NULL,
               manual_tariff_default_pence = NULL, manual_tariff_off_peak_json = NULL
        WHERE id = ?1`
@@ -480,17 +510,23 @@ export async function setHouseholdEnergyConfig(
   const octopusRegion = config.tariff.type === "octopus_agile" ? config.tariff.octopusRegion : null;
   const manualDefaultPence = config.tariff.type === "manual" ? config.tariff.defaultPence : null;
   const manualOffPeakJson = config.tariff.type === "manual" ? JSON.stringify(config.tariff.offPeakWindows) : null;
+  // Store empty HA entity IDs as NULL rather than '' for a 'boreas_device'
+  // household — keeps them consistent with "never configured" rather than
+  // a confusing empty string, and rowToEnergyConfig's null-coalescing
+  // (?? "") already treats the two identically on the way back out.
+  const heatpumpEntityId = config.heatpumpEntityId || null;
+  const roomTempEntityId = config.roomTempEntityId || null;
 
   await env.DB.prepare(
     `UPDATE households SET heatpump_entity_id = ?1, room_temp_entity_id = ?2, heating_min_temp_c = ?3,
             heating_max_temp_c = ?4, postcode = ?5, met_office_latitude = ?6, met_office_longitude = ?7,
-            hvac_mode = ?8, hvac_auto_heat_below_c = ?9, hvac_auto_cool_above_c = ?10,
-            tariff_type = ?11, octopus_region = ?12, manual_tariff_default_pence = ?13, manual_tariff_off_peak_json = ?14
-     WHERE id = ?15`
+            hvac_mode = ?8, hvac_auto_heat_below_c = ?9, hvac_auto_cool_above_c = ?10, heatpump_control = ?11,
+            tariff_type = ?12, octopus_region = ?13, manual_tariff_default_pence = ?14, manual_tariff_off_peak_json = ?15
+     WHERE id = ?16`
   )
     .bind(
-      config.heatpumpEntityId,
-      config.roomTempEntityId,
+      heatpumpEntityId,
+      roomTempEntityId,
       config.minTempC,
       config.maxTempC,
       config.postcode,
@@ -499,6 +535,7 @@ export async function setHouseholdEnergyConfig(
       config.hvacMode,
       config.autoHeatBelowC,
       config.autoCoolAboveC,
+      config.heatpumpControl,
       config.tariff.type,
       octopusRegion,
       manualDefaultPence,
@@ -546,8 +583,10 @@ export async function listHouseholdsReadyForEnergyOptimization(env: Env): Promis
   const { results } = await env.DB.prepare(
     `SELECT id, heating_addon_active, ${ENERGY_ROW_COLUMNS}
      FROM households
-     WHERE heatpump_entity_id IS NOT NULL
-       AND room_temp_entity_id IS NOT NULL
+     WHERE (
+         (heatpump_control = 'boreas_device')
+         OR (heatpump_entity_id IS NOT NULL AND room_temp_entity_id IS NOT NULL)
+       )
        AND heating_min_temp_c IS NOT NULL
        AND heating_max_temp_c IS NOT NULL
        AND met_office_latitude IS NOT NULL
