@@ -122,6 +122,31 @@ a PIN or password, which only ever need to be checked, never read.
 
 `500` if `ENCRYPTION_KEY` isn't configured on this Worker at all.
 
+### Setting up a household's heat pump optimization
+
+#### `POST /integrator/households/:id/energy`
+
+Session-authed, same ownership check as the HA endpoint above.
+
+```json
+{
+  "heatpump_entity_id": "climate.living_room_heat_pump",
+  "room_temp_entity_id": "sensor.living_room_temperature",
+  "min_temp_c": 18,
+  "max_temp_c": 21,
+  "octopus_region": "C",
+  "latitude": "51.5",
+  "longitude": "-0.12"
+}
+```
+
+Technical setup for [heating optimization](energy.md) — this is the
+*installer's* side of it (which entities, which tariff region, which
+comfort band), entirely separate from whether the household is actually
+*paying* for the add-on, which the homeowner controls from their own
+[billing portal](billing.md). Setting this doesn't start anything running
+on its own; see `billing.md`'s Enforcement section for the full gate.
+
 ## What's not built yet
 
 - **No way to remove/transfer a household**, rename one, or regenerate its

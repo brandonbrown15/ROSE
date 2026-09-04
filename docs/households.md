@@ -29,6 +29,13 @@ CREATE TABLE households (
 );
 ```
 
+(Illustrative, not exhaustive — `households` has since grown billing
+columns (`customer_email`, `stripe_customer_id`, `subscription_status`,
+`heating_addon_active`, ...) and heat pump config columns
+(`heatpump_entity_id`, `octopus_region`, ...) covered in
+[`billing.md`](billing.md) and [`energy.md`](energy.md) rather than
+repeated here — see migrations `0007` and `0008` for the exact schema.)
+
 `ha_url`/`ha_token_encrypted` matter more than they might look: earlier,
 `HA_URL`/`HA_TOKEN` were global Worker secrets — one Home Assistant instance
 for the whole backend, which only made sense with a single household. Every

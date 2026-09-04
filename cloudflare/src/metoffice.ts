@@ -1,5 +1,3 @@
-import type { Env } from "./index";
-
 export interface WeatherPoint {
   /** ISO timestamp, UTC */
   time: string;
@@ -25,19 +23,21 @@ const MET_OFFICE_HOURLY_URL = "https://data.hub.api.metoffice.gov.uk/sitespecifi
  * than silently feeding a wrong number into the heating optimizer — see
  * docs/energy.md for how to inspect a raw response and adjust
  * `extractTemperature` if needed.
+ *
+ * `apiKey` is Brandon's own Met Office DataHub account — a single Worker
+ * secret shared across every household, same as it always was, since it's
+ * a developer account key, not something each homeowner has. `latitude`/
+ * `longitude` are per-household instead (each home's forecast location —
+ * see households.ts's HouseholdEnergyConfig).
  */
-export async function getHourlyForecast(env: Env): Promise<WeatherPoint[]> {
-  if (!env.MET_OFFICE_API_KEY || !env.MET_OFFICE_LATITUDE || !env.MET_OFFICE_LONGITUDE) {
-    throw new Error("MET_OFFICE_API_KEY / MET_OFFICE_LATITUDE / MET_OFFICE_LONGITUDE are not fully set");
-  }
-
+export async function getHourlyForecast(apiKey: string, latitude: string, longitude: string): Promise<WeatherPoint[]> {
   const url = new URL(MET_OFFICE_HOURLY_URL);
-  url.searchParams.set("latitude", env.MET_OFFICE_LATITUDE);
-  url.searchParams.set("longitude", env.MET_OFFICE_LONGITUDE);
+  url.searchParams.set("latitude", latitude);
+  url.searchParams.set("longitude", longitude);
   url.searchParams.set("excludeParameterMetadata", "true");
 
   const res = await fetch(url, {
-    headers: { apikey: env.MET_OFFICE_API_KEY, accept: "application/json" },
+    headers: { apikey: apiKey, accept: "application/json" },
   });
   if (!res.ok) {
     throw new Error(`Met Office request failed: ${res.status} ${await res.text()}`);

@@ -10,18 +10,21 @@ import {
   verifyCustomerSessionCookie,
 } from "./customers";
 import { DASHBOARD_HTML } from "./dashboardUI";
-import { handleEnergyRun, handleEnergyStatus, runEnergyOptimization } from "./energy";
+import { handleEnergyRun, handleEnergyStatus, runAllHeatPumpOptimizations, runSolarAndEvOptimization } from "./energy";
 import {
   createHousehold,
   findHouseholdByStripeCustomerId,
   getHouseholdBilling,
+  getHouseholdEnergyConfig,
   householdBelongsToIntegrator,
   listIntegratorHouseholds,
   resolveHousehold,
+  setHouseholdEnergyConfig,
   setHouseholdHaConfig,
   setHouseholdPin,
   setHouseholdStripeCustomer,
   setHouseholdSubscription,
+  updateSubscriptionAddonsBySubscriptionId,
   updateSubscriptionStatusBySubscriptionId,
   verifyHouseholdPin,
 } from "./households";
@@ -74,7 +77,14 @@ export interface Env {
   // above. A household with no subscription (the default for every
   // household today) is entirely unaffected either way.
   STRIPE_SECRET_KEY?: string; // sk_test_... / sk_live_... — never logged, never returned to a client
-  STRIPE_PRICE_ID?: string; // price_... — the recurring Price object for ROSE's subscription
+  // Two separate recurring Price objects — the base assistant subscription
+  // and the heating optimization add-on (docs/billing.md) — rather than one
+  // flat price, so a household can subscribe to either or both. A
+  // household's subscription carries one or both as line items; the
+  // webhook (handleBillingWebhook) inspects which and keeps
+  // heating_addon_active in sync.
+  STRIPE_CHAT_PRICE_ID?: string; // price_...
+  STRIPE_HEATING_PRICE_ID?: string; // price_...
   // Not actually secret — Stripe's publishable keys are designed to ship in
   // client-side JS (see billingUI.ts). Kept here rather than hardcoded so
   // it can be rotated without a redeploy, and kept out of wrangler.jsonc's
@@ -90,28 +100,25 @@ export interface Env {
   OPENAI_CHAT_MODEL: string;
   OPENAI_EMBEDDING_MODEL: string;
 
-  // Energy optimization — all optional, all off unless every one of the
-  // required fields below is set. See docs/energy.md. Stored as secrets for
-  // setup simplicity even where the value isn't actually sensitive.
+  // Energy optimization — see docs/energy.md. A global kill switch plus two
+  // account-level (not per-household) config values that stay here:
+  // MET_OFFICE_API_KEY is Brandon's own developer account, and
+  // OCTOPUS_PRODUCT_CODE is a national tariff code override, not something
+  // that varies per home. Everything that IS home-specific — heat pump
+  // entity ids, temperature band, Octopus region, forecast location — moved
+  // to per-household D1 columns in migration 0008 (see households.ts's
+  // HouseholdEnergyConfig) once heating optimization became a billed
+  // per-household add-on rather than a single-Worker global feature.
   ENERGY_OPTIMIZATION_ENABLED?: string; // "true" to enable; anything else (including unset) is off
-  OCTOPUS_REGION?: string; // single letter, A-P
   OCTOPUS_PRODUCT_CODE?: string; // optional override; auto-detected if unset
   MET_OFFICE_API_KEY?: string;
-  MET_OFFICE_LATITUDE?: string;
-  MET_OFFICE_LONGITUDE?: string;
-  ROSE_HEATPUMP_ENTITY_ID?: string; // e.g. climate.living_room_heat_pump
-  ROSE_ROOM_TEMP_ENTITY_ID?: string; // e.g. sensor.living_room_temperature
-  ROSE_HEATING_MIN_TEMP?: string; // °C, hard floor — never overridden for cost
-  ROSE_HEATING_MAX_TEMP?: string; // °C, hard ceiling — never overridden for cost
 
-  // Solar (SolarEdge) — independently optional; works with or without the
-  // heat pump fields above. A live surplus reading overrides the heat pump
-  // target to max (free heat) and, if configured, starts EV charging.
+  // Solar (SolarEdge) + EV charging — still single-tenant/global (not sold
+  // as a billed add-on yet, unlike heat pump optimization above), scoped to
+  // the bootstrap 'default' household's Home Assistant connection. A live
+  // solar surplus reading, if configured, starts EV charging.
   SOLAREDGE_API_KEY?: string;
   SOLAREDGE_SITE_ID?: string;
-
-  // EV charging — independently optional; requires solar to be configured
-  // too (it decides purely off live solar surplus, no price fallback yet).
   // Controlled via Home Assistant, not a direct SolarEdge call — see
   // docs/energy.md for why. *_SERVICE values are "domain.service" strings,
   // e.g. "switch.turn_on" — whatever your HA integration for the charger
@@ -316,6 +323,66 @@ async function handleSetHouseholdHa(
   return jsonOk({ ok: true });
 }
 
+/** Set (or clear) a household's heat pump optimization config — technical
+ * setup, the same trust boundary as handleSetHouseholdHa above (an
+ * integrator configuring a household they manage), not something a
+ * homeowner enters. Whether this household is actually *billed* for
+ * optimization to run is entirely separate — see heating_addon_active and
+ * docs/billing.md; this only wires up the "how", not the "is paying". */
+async function handleSetHouseholdEnergy(
+  request: Request,
+  env: Env,
+  integratorId: string,
+  householdId: string
+): Promise<Response> {
+  if (!(await householdBelongsToIntegrator(env, householdId, integratorId))) {
+    return jsonError("not found", 404);
+  }
+
+  let body: {
+    heatpump_entity_id?: string;
+    room_temp_entity_id?: string;
+    min_temp_c?: number;
+    max_temp_c?: number;
+    octopus_region?: string;
+    latitude?: string;
+    longitude?: string;
+  };
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("invalid JSON body", 400);
+  }
+
+  if (typeof body.heatpump_entity_id !== "string" || !body.heatpump_entity_id) {
+    return jsonError("'heatpump_entity_id' is required", 400);
+  }
+  if (typeof body.room_temp_entity_id !== "string" || !body.room_temp_entity_id) {
+    return jsonError("'room_temp_entity_id' is required", 400);
+  }
+  if (typeof body.min_temp_c !== "number" || typeof body.max_temp_c !== "number" || body.min_temp_c >= body.max_temp_c) {
+    return jsonError("'min_temp_c' and 'max_temp_c' are required numbers, with min_temp_c < max_temp_c", 400);
+  }
+  if (typeof body.octopus_region !== "string" || !/^[A-P]$/.test(body.octopus_region)) {
+    return jsonError("'octopus_region' must be a single letter A-P", 400);
+  }
+  if (typeof body.latitude !== "string" || typeof body.longitude !== "string" || !body.latitude || !body.longitude) {
+    return jsonError("'latitude' and 'longitude' are required", 400);
+  }
+
+  await setHouseholdEnergyConfig(env, householdId, {
+    heatpumpEntityId: body.heatpump_entity_id,
+    roomTempEntityId: body.room_temp_entity_id,
+    minTempC: body.min_temp_c,
+    maxTempC: body.max_temp_c,
+    octopusRegion: body.octopus_region,
+    metOfficeLatitude: body.latitude,
+    metOfficeLongitude: body.longitude,
+  });
+
+  return jsonOk({ ok: true });
+}
+
 // --- Customer billing portal API ---------------------------------------------
 //
 // A third, separate auth domain (customers.ts) — distinct from both the
@@ -352,7 +419,7 @@ async function handlePortalSignup(request: Request, env: Env): Promise<Response>
   }
 
   return jsonOk(
-    { email: customer.email, subscription_status: null },
+    { email: customer.email, subscription_status: null, heating_addon_active: false },
     { "set-cookie": await createCustomerSessionCookie(env, customer.householdId) }
   );
 }
@@ -376,7 +443,11 @@ async function handlePortalLogin(request: Request, env: Env): Promise<Response> 
 
   const billing = await getHouseholdBilling(env, customer.householdId);
   return jsonOk(
-    { email: customer.email, subscription_status: billing?.subscriptionStatus ?? null },
+    {
+      email: customer.email,
+      subscription_status: billing?.subscriptionStatus ?? null,
+      heating_addon_active: billing?.heatingAddonActive ?? false,
+    },
     { "set-cookie": await createCustomerSessionCookie(env, customer.householdId) }
   );
 }
@@ -387,7 +458,11 @@ function handlePortalLogout(): Response {
 
 async function handlePortalStatus(env: Env, householdId: string): Promise<Response> {
   const billing = await getHouseholdBilling(env, householdId);
-  return jsonOk({ email: billing?.customerEmail ?? null, subscription_status: billing?.subscriptionStatus ?? null });
+  return jsonOk({
+    email: billing?.customerEmail ?? null,
+    subscription_status: billing?.subscriptionStatus ?? null,
+    heating_addon_active: billing?.heatingAddonActive ?? false,
+  });
 }
 
 /** The Stripe publishable key, handed to the portal page so it can
@@ -401,14 +476,26 @@ function handlePortalConfig(env: Env): Response {
 
 /** Start (or restart) a household's subscription: ensures it has a Stripe
  * Customer, creates a Subscription in Stripe's "incomplete" flow (see
- * stripe.ts's createStripeSubscription for why), and returns the first
- * invoice's PaymentIntent client_secret for the portal page to confirm
- * with Stripe.js. subscription_status only actually flips to 'active'
- * once that confirmation succeeds and Stripe's webhook tells us so — not
- * here. */
-async function handlePortalStartSubscription(env: Env, householdId: string): Promise<Response> {
-  if (!env.STRIPE_SECRET_KEY || !env.STRIPE_PRICE_ID) {
+ * stripe.ts's createStripeSubscription for why) with the base assistant
+ * price and, if requested, the heating optimization add-on price as a
+ * second line item, and returns the first invoice's PaymentIntent
+ * client_secret for the portal page to confirm with Stripe.js.
+ * subscription_status/heating_addon_active only actually flip once that
+ * confirmation succeeds and Stripe's webhook tells us so — not here. */
+async function handlePortalStartSubscription(request: Request, env: Env, householdId: string): Promise<Response> {
+  if (!env.STRIPE_SECRET_KEY || !env.STRIPE_CHAT_PRICE_ID) {
     return jsonError("billing is not configured on this Worker yet", 500);
+  }
+
+  let body: { include_heating?: boolean };
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+  const includeHeating = body.include_heating === true;
+  if (includeHeating && !env.STRIPE_HEATING_PRICE_ID) {
+    return jsonError("the heating optimization add-on is not configured on this Worker yet", 500);
   }
 
   const billing = await getHouseholdBilling(env, householdId);
@@ -427,8 +514,11 @@ async function handlePortalStartSubscription(env: Env, householdId: string): Pro
       await setHouseholdStripeCustomer(env, householdId, stripeCustomerId);
     }
 
-    const subscription = await createStripeSubscription(env.STRIPE_SECRET_KEY, stripeCustomerId, env.STRIPE_PRICE_ID);
-    await setHouseholdSubscription(env, householdId, subscription.id, subscription.status);
+    const priceIds = includeHeating
+      ? [env.STRIPE_CHAT_PRICE_ID, env.STRIPE_HEATING_PRICE_ID!]
+      : [env.STRIPE_CHAT_PRICE_ID];
+    const subscription = await createStripeSubscription(env.STRIPE_SECRET_KEY, stripeCustomerId, priceIds);
+    await setHouseholdSubscription(env, householdId, subscription.id, subscription.status, includeHeating);
 
     const clientSecret = subscription.latest_invoice?.payment_intent?.client_secret;
     if (!clientSecret) {
@@ -476,17 +566,29 @@ async function handleBillingWebhook(request: Request, env: Env): Promise<Respons
   const obj = event.data?.object ?? {};
 
   // customer.subscription.{created,updated,deleted} carry the full
-  // subscription object — id, status, and customer all present directly.
+  // subscription object — id, status, customer, and its line items (each
+  // with a price.id) all present directly, which is how heating_addon_active
+  // gets kept in sync: true iff the heating price is actually one of this
+  // subscription's items right now. A .deleted event forces it false
+  // outright rather than trusting items (the subscription's gone either
+  // way) — belt and braces alongside listHouseholdsReadyForEnergyOptimization's
+  // own subscription_status check.
   if (eventType.startsWith("customer.subscription.")) {
     const subscriptionId = obj["id"] as string | undefined;
     const status = obj["status"] as string | undefined;
     const customerId = obj["customer"] as string | undefined;
+    const items = obj["items"] as { data?: { price?: { id?: string } }[] } | undefined;
+    const heatingAddonActive =
+      eventType === "customer.subscription.deleted"
+        ? false
+        : (items?.data ?? []).some((item) => item.price?.id === env.STRIPE_HEATING_PRICE_ID);
+
     if (subscriptionId && status) {
       const household = customerId ? await findHouseholdByStripeCustomerId(env, customerId) : null;
       if (household) {
-        await setHouseholdSubscription(env, household.id, subscriptionId, status);
+        await setHouseholdSubscription(env, household.id, subscriptionId, status, heatingAddonActive);
       } else {
-        await updateSubscriptionStatusBySubscriptionId(env, subscriptionId, status);
+        await updateSubscriptionAddonsBySubscriptionId(env, subscriptionId, status, heatingAddonActive);
       }
     }
   }
@@ -607,6 +709,11 @@ export default {
         return withCors(await handleSetHouseholdHa(request, env, integratorId, haMatch[1]));
       }
 
+      const energyMatch = url.pathname.match(/^\/integrator\/households\/([^/]+)\/energy$/);
+      if (energyMatch && request.method === "POST") {
+        return withCors(await handleSetHouseholdEnergy(request, env, integratorId, energyMatch[1]));
+      }
+
       return withCors(jsonError("not found", 404));
     }
 
@@ -642,7 +749,7 @@ export default {
         return withCors(await handlePortalStatus(env, customerHouseholdId));
       }
       if (url.pathname === "/portal/billing/start-subscription" && request.method === "POST") {
-        return withCors(await handlePortalStartSubscription(env, customerHouseholdId));
+        return withCors(await handlePortalStartSubscription(request, env, customerHouseholdId));
       }
 
       return withCors(jsonError("not found", 404));
@@ -678,28 +785,55 @@ export default {
       return withCors(await handleSetPin(request, env, household.id));
     }
 
-    // Energy optimization — see docs/energy.md. Gated only by the
-    // household's own bearer token, same as /chat; a no-op response unless
-    // ENERGY_OPTIMIZATION_ENABLED="true" and every required Env field is set.
+    // Energy optimization — see docs/energy.md and docs/billing.md. Gated
+    // by the household's own bearer token, same as /chat, and a no-op
+    // unless ENERGY_OPTIMIZATION_ENABLED="true"; POST /energy/run also
+    // requires the household to be both technically configured (its
+    // integrator's job — see handleSetHouseholdEnergy) and either the
+    // bootstrap 'default' household or actually paying for the add-on,
+    // same condition households.ts's listHouseholdsReadyForEnergyOptimization
+    // uses for the cron.
     if (url.pathname === "/energy/status" && request.method === "GET") {
-      return withCors(await handleEnergyStatus(env));
+      return withCors(await handleEnergyStatus(env, household.id));
     }
 
     if (url.pathname === "/energy/run" && request.method === "POST") {
-      return withCors(await handleEnergyRun(env));
+      const energyConfig = await getHouseholdEnergyConfig(env, household.id);
+      if (!energyConfig) {
+        return withCors(
+          jsonError("heating optimization isn't set up for this household yet — ask your installer", 409)
+        );
+      }
+      if (household.id !== "default") {
+        const billing = await getHouseholdBilling(env, household.id);
+        const active =
+          billing?.heatingAddonActive &&
+          (billing.subscriptionStatus === "active" || billing.subscriptionStatus === "trialing");
+        if (!active) {
+          return withCors(
+            jsonError("the heating optimization add-on isn't active for this household — subscribe at /portal", 402)
+          );
+        }
+      }
+      return withCors(await handleEnergyRun(env, household.id, energyConfig));
     }
 
     return withCors(jsonError("not found", 404));
   },
 
   // Cloudflare Cron Trigger (see wrangler.jsonc `triggers.crons`) — recomputes
-  // the heating plan and applies the current slot's target temperature.
-  // No-op unless ENERGY_OPTIMIZATION_ENABLED="true" and every required field
-  // in Env is set — see docs/energy.md.
+  // every eligible household's heating plan and applies the current slot's
+  // target temperature, plus the (still global, 'default'-only) solar/EV
+  // cycle. No-op unless ENERGY_OPTIMIZATION_ENABLED="true" — see
+  // docs/energy.md. The two run independently (one failing doesn't block
+  // the other) since they're now genuinely separate concerns.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     if (env.ENERGY_OPTIMIZATION_ENABLED !== "true") return;
     ctx.waitUntil(
-      runEnergyOptimization(env).catch((err) => console.error("scheduled energy optimization failed", err))
+      runAllHeatPumpOptimizations(env).catch((err) => console.error("scheduled heat pump optimization failed", err))
+    );
+    ctx.waitUntil(
+      runSolarAndEvOptimization(env).catch((err) => console.error("scheduled solar/EV optimization failed", err))
     );
   },
 } satisfies ExportedHandler<Env>;

@@ -54,7 +54,8 @@ npx wrangler secret put ENCRYPTION_KEY
 # do anything beyond report "not configured":
 npx wrangler secret put STRIPE_SECRET_KEY
 npx wrangler secret put STRIPE_PUBLISHABLE_KEY
-npx wrangler secret put STRIPE_PRICE_ID
+npx wrangler secret put STRIPE_CHAT_PRICE_ID
+npx wrangler secret put STRIPE_HEATING_PRICE_ID
 npx wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
 

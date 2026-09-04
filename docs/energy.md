@@ -3,14 +3,18 @@
 **Off by default, and each piece is independently optional.** A subsystem
 that uses Octopus Agile's half-hourly electricity prices and a Met Office
 weather forecast to decide when to preheat and when to coast a Samsung (or
-any) heat pump — the same idea as Homely — plus two SolarEdge add-ons you
-can layer in once that hardware exists: live solar surplus overriding the
-heat pump schedule ("free heat beats cheap heat"), and solar-surplus-first
-EV charging.
+any) heat pump — the same idea as Homely, and priced to compete with it
+directly (see [`billing.md`](billing.md#pricing)) — plus two SolarEdge
+add-ons you can layer in once that hardware exists: live solar surplus
+overriding the heat pump schedule ("free heat beats cheap heat"), and
+solar-surplus-first EV charging.
 
-None of the three needs the others. Enable just heat pump scheduling today;
-add solar and EV charging later, independently, once that's installed — see
-[Enabling it](#enabling-it).
+**Heat pump scheduling is per-household and billed as an add-on**
+(`billing.md`); solar and EV charging are still single-tenant/global,
+scoped to the bootstrap `default` household, and not sold as a billed
+add-on yet. None of the three needs the others. Enable just heat pump
+scheduling today; add solar and EV charging later, independently, once
+that's installed — see [Enabling it](#enabling-it).
 
 **Read this whole page before enabling it.** It changes your actual heating
 based on external data ROSE doesn't control (a price API, a weather API,
@@ -67,17 +71,21 @@ SolarEdge directly.
 
 ## Safety model
 
-- **Hard-clamped, always.** Every target temperature is clamped to
-  `[ROSE_HEATING_MIN_TEMP, ROSE_HEATING_MAX_TEMP]` before it's ever sent to
-  the heat pump — the optimizer cannot pick a temperature outside the band
-  you set, regardless of price.
-- **Safety floor overrides cost.** If your room sensor reads below
-  `ROSE_HEATING_MIN_TEMP` when a cycle runs, ROSE ignores the price schedule
+- **Hard-clamped, always.** Every target temperature is clamped to your
+  household's configured `[min, max]` band before it's ever sent to the
+  heat pump — the optimizer cannot pick a temperature outside the band you
+  set, regardless of price.
+- **Safety floor overrides cost.** If your room sensor reads below the
+  configured minimum when a cycle runs, ROSE ignores the price schedule
   entirely and boosts to the max — comfort/safety always wins over saving
   money.
-- **Off by default.** Nothing runs — no API calls, no control — unless
-  `ENERGY_OPTIMIZATION_ENABLED` is explicitly set to `"true"` *and* every
-  required field below is set. Missing config = no-op, not a guess.
+- **Off by default, and billing-gated per household.** Nothing runs for a
+  household — no API calls, no control — unless `ENERGY_OPTIMIZATION_ENABLED`
+  is set to `"true"` on the Worker, that household's technical config is
+  fully set (below), AND either it's the bootstrap `default` household or
+  it's actually paying for the add-on with an active subscription — see
+  [`billing.md`](billing.md#enforcement). Missing config or unpaid = no-op,
+  not a guess.
 - **A failed cycle does nothing, on purpose.** If Octopus, Met Office,
   SolarEdge, or Home Assistant is unreachable, that cycle logs an error and
   changes nothing for that piece — it never falls back to guessing. The
@@ -136,38 +144,43 @@ Whichever you use, that public HTTPS URL is your `HA_URL`.
 ### 2. A Home Assistant long-lived access token
 
 Home Assistant profile (click your name, bottom left) → **Security** →
-**Long-Lived Access Tokens** → **Create Token**. This becomes `HA_TOKEN`.
-(`HA_URL`/`HA_TOKEN` are the same optional pair `cloudflare/src/ha.ts`
-already supports — this feature is what they're for.)
+**Long-Lived Access Tokens** → **Create Token**. This is the same
+`url`/`token` pair set per household via
+[`POST /integrator/households/:id/ha`](integrators.md#managing-a-households-home-assistant-connection)
+(or, for the bootstrap `default` household, the global `HA_URL`/`HA_TOKEN`
+Worker secrets) — this feature reuses whichever Home Assistant connection
+the household already has for device control, it doesn't need its own.
 
 ### 3. Your Octopus Agile region letter
 
 A single letter, A–P, for your electricity distribution area — find it on
 your Octopus account page, or by looking up your postcode against
-[Octopus's regions](https://octopus.energy/agile/). This becomes
-`OCTOPUS_REGION`. (Agile rate data itself is public — no Octopus API key
-needed.)
+[Octopus's regions](https://octopus.energy/agile/). Per-household — set via
+the integrator dashboard (below). (Agile rate data itself is public — no
+Octopus API key needed.)
 
 ### 4. A Met Office DataHub API key
 
 Register at [datahub.metoffice.gov.uk](https://datahub.metoffice.gov.uk),
 subscribe to the free **Site Specific Global Spot** plan (360 calls/day free
-— this feature uses 48/day at the default 30-minute schedule, well within
-that). Becomes `MET_OFFICE_API_KEY`. You'll also need your site's
-`MET_OFFICE_LATITUDE`/`MET_OFFICE_LONGITUDE`.
+per household at the default 30-minute schedule — comfortably covers a
+handful of households before you'd need to think about the free tier's
+limit). Becomes the `MET_OFFICE_API_KEY` Worker secret — one account,
+shared across every household, since it's your own developer account
+rather than something each homeowner has. Each household's own forecast
+**latitude/longitude** is set per-household via the dashboard (below).
 
 ### 5. Your heat pump's entity ID and a room temperature sensor
 
-In Home Assistant, **Developer Tools → States**, find your Samsung heat
-pump's `climate.*` entity ID (`ROSE_HEATPUMP_ENTITY_ID`) and a
-`sensor.*` entity reporting the room's current temperature
-(`ROSE_ROOM_TEMP_ENTITY_ID`).
+In Home Assistant, **Developer Tools → States**, find the heat pump's
+`climate.*` entity ID and a `sensor.*` entity reporting the room's current
+temperature. Per-household, set via the dashboard.
 
-### 6. Decide your comfort band
+### 6. Decide the comfort band
 
-`ROSE_HEATING_MIN_TEMP` / `ROSE_HEATING_MAX_TEMP` in °C — the range the
-optimizer is allowed to move the setpoint within. Start conservative (e.g.
-18–21) until you trust it.
+The min/max °C range the optimizer is allowed to move the setpoint within
+for this household — start conservative (e.g. 18–21) until you trust it.
+Per-household, set via the dashboard.
 
 ### 7. (Solar) A SolarEdge Monitoring API key and site ID
 
@@ -193,27 +206,42 @@ to make up the difference, and looks like it's not really "surplus-only").
 
 ## Enabling it
 
-All of this is set as Worker secrets (`wrangler secret put`) — even the
-non-sensitive ones like entity IDs, for consistency with the rest of ROSE's
-setup. Heat pump, solar, and EV charging are independent — set only the
-group(s) you actually have installed.
+**Heat pump scheduling** is per-household config, set the same way as a
+household's Home Assistant connection — through the integrator dashboard
+(`GET /dashboard`, see [`integrators.md`](integrators.md)), not Worker
+secrets:
+
+```
+POST /integrator/households/:id/energy
+{
+  "heatpump_entity_id": "climate.living_room_heat_pump",
+  "room_temp_entity_id": "sensor.living_room_temperature",
+  "min_temp_c": 18,
+  "max_temp_c": 21,
+  "octopus_region": "C",
+  "latitude": "51.5",
+  "longitude": "-0.12"
+}
+```
+
+The dashboard page has a form for this per household — no `curl` needed.
+Setting this wires up the *how*; whether a household is actually billed to
+run it is entirely separate (the homeowner subscribes to the add-on from
+their own [billing portal](billing.md), `GET /portal`) — see
+[Safety model](#safety-model) above for the full gate.
+
+Three things stay Worker secrets/vars, set once for the whole deployment
+rather than per household:
 
 ```bash
 cd cloudflare
 
-# Heat pump scheduling
-npx wrangler secret put OCTOPUS_REGION            # e.g. C
-npx wrangler secret put MET_OFFICE_API_KEY
-npx wrangler secret put MET_OFFICE_LATITUDE
-npx wrangler secret put MET_OFFICE_LONGITUDE
-npx wrangler secret put ROSE_HEATPUMP_ENTITY_ID    # e.g. climate.living_room_heat_pump
-npx wrangler secret put ROSE_ROOM_TEMP_ENTITY_ID   # e.g. sensor.living_room_temperature
-npx wrangler secret put ROSE_HEATING_MIN_TEMP      # e.g. 18
-npx wrangler secret put ROSE_HEATING_MAX_TEMP      # e.g. 21
-npx wrangler secret put HA_URL                     # your tunnel/Nabu Casa URL, if not already set
-npx wrangler secret put HA_TOKEN                   # if not already set
+npx wrangler secret put MET_OFFICE_API_KEY           # your Met Office DataHub account
+# Optional — Octopus's Agile product code is the same nationally; leave unset to auto-detect
+npx wrangler secret put OCTOPUS_PRODUCT_CODE
 
-# Solar (once installed) — independent of the heat pump fields above
+# Solar (once installed) — still single-tenant/global, scoped to the
+# 'default' household — see the note at the top of this doc
 npx wrangler secret put SOLAREDGE_API_KEY
 npx wrangler secret put SOLAREDGE_SITE_ID
 
@@ -223,11 +251,18 @@ npx wrangler secret put ROSE_EV_CHARGER_START_SERVICE          # e.g. switch.tur
 npx wrangler secret put ROSE_EV_CHARGER_STOP_SERVICE           # e.g. switch.turn_off
 npx wrangler secret put ROSE_EV_CHARGER_SURPLUS_THRESHOLD_KW   # e.g. 1.4
 
-# Last — this is what actually turns any of it on:
+# Last — this is the global kill switch that actually turns any of it on:
 npx wrangler secret put ENERGY_OPTIMIZATION_ENABLED  # value: true
 
 npm run deploy
 ```
+
+The bootstrap `default` household is the one exception: it has no
+integrator to log into the dashboard on its behalf, so `scripts/setup.sh`
+writes its heat pump config straight into D1 (`wrangler d1 execute`)
+instead, when you opt in during setup — see
+[`households.md`](households.md#adding-a-new-household) for the same
+"by hand" pattern applied elsewhere.
 
 Redeploy after setting secrets so the cron trigger picks them up.
 
@@ -241,8 +276,11 @@ curl -X POST https://<your-worker-url>/energy/run \
   -H "Authorization: Bearer <ROSE_API_KEY>"
 ```
 
-This runs a real cycle immediately — including actually setting the heat
-pump — and returns the full plan plus which slot was applied and why:
+This runs this household's heat pump cycle immediately — including
+actually setting the heat pump — and returns the full plan plus which slot
+was applied and why. `409` if this household has no heat pump config set
+yet; `402` if it does but isn't the `default` household and doesn't have
+an active heating add-on subscription (see [`billing.md`](billing.md)).
 
 ```json
 {
@@ -257,8 +295,10 @@ pump — and returns the full plan plus which slot was applied and why:
 }
 ```
 
-`solar`/`evCharging` are `null` if those pieces aren't configured — that's
-expected and fine if you only have the heat pump set up so far.
+`solar`/`evCharging` are only ever non-null when the calling household is
+`default` — they're still single-tenant (see the note at the top of this
+page), so `/energy/run` only actually runs that part for `default`,
+regardless of who calls it.
 
 Check `GET /energy/status` any time afterward for the currently-stored plan
 and recent EV start/stop events, without triggering a new cycle:
