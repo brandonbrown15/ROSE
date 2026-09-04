@@ -81,11 +81,25 @@ export interface StripeSubscription {
  * customer's default payment method for future renewals — see
  * billingUI.ts. The subscription stays "incomplete" in Stripe (and
  * subscription_status stays whatever it was in D1) until that confirmation
- * succeeds and a webhook tells us so (index.ts's POST /billing/webhook). */
-export async function createStripeSubscription(secretKey: string, customerId: string, priceId: string): Promise<StripeSubscription> {
+ * succeeds and a webhook tells us so (index.ts's POST /billing/webhook).
+ *
+ * `priceIds` is one or more Price ids as separate line items on the same
+ * subscription — e.g. the base assistant price alone, or that plus the
+ * heating optimization add-on price (docs/billing.md) — rather than a
+ * separate Stripe subscription per product, so a household gets one
+ * invoice and one card charge either way. */
+export async function createStripeSubscription(
+  secretKey: string,
+  customerId: string,
+  priceIds: string[]
+): Promise<StripeSubscription> {
+  const items: Record<string, string> = {};
+  priceIds.forEach((priceId, i) => {
+    items[`items[${i}][price]`] = priceId;
+  });
   return stripeRequest<StripeSubscription>(secretKey, "POST", "/subscriptions", {
     customer: customerId,
-    "items[0][price]": priceId,
+    ...items,
     payment_behavior: "default_incomplete",
     "expand[0]": "latest_invoice.payment_intent",
   });

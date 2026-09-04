@@ -132,6 +132,9 @@ any_energy_configured=false
 read -rp "Set up heat pump scheduling (Octopus Agile + Met Office) now? [y/N] " setup_heatpump
 if [[ "$setup_heatpump" =~ ^[Yy]$ ]]; then
   echo "See docs/energy.md if you haven't read it yet — this needs a Home Assistant URL reachable from the internet."
+  echo "Heat pump config is per-household (docs/households.md) — every field below except HA_URL/HA_TOKEN and"
+  echo "MET_OFFICE_API_KEY goes straight into this D1 database's 'default' household row, not a Worker secret,"
+  echo "since a real integrator-managed household sets this the same way, via POST /integrator/households/:id/energy."
   read -rp "  HA URL (e.g. your Cloudflare Tunnel or Nabu Casa URL): " ENERGY_HA_URL
   read -rsp "  HA long-lived access token (input hidden): " ENERGY_HA_TOKEN; echo
   read -rp "  Octopus Agile region letter (A-P): " ENERGY_OCTOPUS_REGION
@@ -145,14 +148,12 @@ if [[ "$setup_heatpump" =~ ^[Yy]$ ]]; then
 
   (cd "$CF_DIR" && printf '%s' "$ENERGY_HA_URL" | npx wrangler secret put HA_URL)
   (cd "$CF_DIR" && printf '%s' "$ENERGY_HA_TOKEN" | npx wrangler secret put HA_TOKEN)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_OCTOPUS_REGION" | npx wrangler secret put OCTOPUS_REGION)
   (cd "$CF_DIR" && printf '%s' "$ENERGY_MET_OFFICE_API_KEY" | npx wrangler secret put MET_OFFICE_API_KEY)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_MET_OFFICE_LAT" | npx wrangler secret put MET_OFFICE_LATITUDE)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_MET_OFFICE_LON" | npx wrangler secret put MET_OFFICE_LONGITUDE)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_HEATPUMP_ENTITY" | npx wrangler secret put ROSE_HEATPUMP_ENTITY_ID)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_ROOM_TEMP_ENTITY" | npx wrangler secret put ROSE_ROOM_TEMP_ENTITY_ID)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_MIN_TEMP" | npx wrangler secret put ROSE_HEATING_MIN_TEMP)
-  (cd "$CF_DIR" && printf '%s' "$ENERGY_MAX_TEMP" | npx wrangler secret put ROSE_HEATING_MAX_TEMP)
+  (cd "$CF_DIR" && npx wrangler d1 execute rose-db --remote --command \
+    "UPDATE households SET octopus_region = '$ENERGY_OCTOPUS_REGION', met_office_latitude = '$ENERGY_MET_OFFICE_LAT', \
+     met_office_longitude = '$ENERGY_MET_OFFICE_LON', heatpump_entity_id = '$ENERGY_HEATPUMP_ENTITY', \
+     room_temp_entity_id = '$ENERGY_ROOM_TEMP_ENTITY', heating_min_temp_c = $ENERGY_MIN_TEMP, \
+     heating_max_temp_c = $ENERGY_MAX_TEMP WHERE id = 'default'")
   any_energy_configured=true
   echo "==> Heat pump scheduling configured."
 else

@@ -1,5 +1,7 @@
 import type { Env } from "./index";
-import { HomeAssistantClient } from "./ha";
+import type { HouseholdEnergyConfig } from "./households";
+import { getHouseholdHaConfig, listHouseholdsReadyForEnergyOptimization } from "./households";
+import { controlDevice, getEntityState } from "./homeAssistant";
 import { getAgileRates } from "./octopus";
 import { getHourlyForecast, type WeatherPoint } from "./metoffice";
 import { getCurrentPowerFlow, type SolarPowerFlow } from "./solaredge";
@@ -12,26 +14,6 @@ export interface PlanSlot {
   outsideTempC: number | null;
   estimatedCop: number | null;
   reason: string;
-}
-
-interface EnergyConfig {
-  heatpumpEntityId: string;
-  roomTempEntityId: string;
-  minTempC: number;
-  maxTempC: number;
-}
-
-function readConfig(env: Env): EnergyConfig | null {
-  const { ROSE_HEATPUMP_ENTITY_ID, ROSE_ROOM_TEMP_ENTITY_ID, ROSE_HEATING_MIN_TEMP, ROSE_HEATING_MAX_TEMP } = env;
-  if (!ROSE_HEATPUMP_ENTITY_ID || !ROSE_ROOM_TEMP_ENTITY_ID || !ROSE_HEATING_MIN_TEMP || !ROSE_HEATING_MAX_TEMP) {
-    return null;
-  }
-  const minTempC = Number(ROSE_HEATING_MIN_TEMP);
-  const maxTempC = Number(ROSE_HEATING_MAX_TEMP);
-  if (!Number.isFinite(minTempC) || !Number.isFinite(maxTempC) || minTempC >= maxTempC) {
-    throw new Error("ROSE_HEATING_MIN_TEMP / ROSE_HEATING_MAX_TEMP are missing or invalid (min must be < max)");
-  }
-  return { heatpumpEntityId: ROSE_HEATPUMP_ENTITY_ID, roomTempEntityId: ROSE_ROOM_TEMP_ENTITY_ID, minTempC, maxTempC };
 }
 
 interface EvChargerConfig {
@@ -55,6 +37,11 @@ interface EvChargerConfig {
  * to SolarEdge's API changing (the HA integration absorbs that, not ROSE)
  * and works with any charger brand, not just SolarEdge's. See
  * docs/energy.md.
+ *
+ * Solar and EV charging remain single-tenant/global (env vars, not
+ * per-household config) and scoped to the 'default' household's Home
+ * Assistant connection — see the module comment below and migration
+ * 0008's comment for why, unlike heat pump optimization.
  */
 function readEvConfig(env: Env): EvChargerConfig | null {
   const { ROSE_EV_CHARGER_ENTITY_ID, ROSE_EV_CHARGER_START_SERVICE, ROSE_EV_CHARGER_STOP_SERVICE } = env;
@@ -117,25 +104,28 @@ function nearestWeather(weather: WeatherPoint[], atISO: string): WeatherPoint | 
 }
 
 /**
- * Build a heating plan for the next 24h: rank each Agile price slot by
- * price-adjusted-for-efficiency, and classify the cheapest third as
- * "preheat", the priciest third as "coast", and the rest as "hold
- * comfort". This is a simple heuristic, not a real thermal model of the
- * house — see docs/energy.md for what a better version would need.
+ * Build a heating plan for the next 24h for one household: rank each Agile
+ * price slot (that household's own tariff region) by price-adjusted-for-
+ * efficiency, and classify the cheapest third as "preheat", the priciest
+ * third as "coast", and the rest as "hold comfort". A simple heuristic, not
+ * a real thermal model of the house — see docs/energy.md for what a better
+ * version would need.
  */
-export async function buildPlan(env: Env): Promise<PlanSlot[] | null> {
-  const config = readConfig(env);
-  if (!config) return null;
-
+export async function buildPlan(env: Env, config: HouseholdEnergyConfig): Promise<PlanSlot[]> {
   const now = new Date();
   const horizon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
   const [rates, weather] = await Promise.all([
-    getAgileRates(env, now, horizon),
+    getAgileRates(config.octopusRegion, env.OCTOPUS_PRODUCT_CODE, now, horizon),
     // Weather sharpens the ranking but isn't load-bearing — if Met Office
-    // is unreachable or misconfigured, fall back to ranking on price alone
-    // rather than failing the whole plan.
-    getHourlyForecast(env).catch(() => [] as WeatherPoint[]),
+    // is unreachable/misconfigured, fall back to ranking on price alone
+    // rather than failing the whole plan. Also a no-op cleanly if
+    // MET_OFFICE_API_KEY (the shared Worker secret) isn't set at all.
+    env.MET_OFFICE_API_KEY
+      ? getHourlyForecast(env.MET_OFFICE_API_KEY, config.metOfficeLatitude, config.metOfficeLongitude).catch(
+          () => [] as WeatherPoint[]
+        )
+      : Promise.resolve([] as WeatherPoint[]),
   ]);
 
   if (rates.length === 0) return [];
@@ -179,65 +169,114 @@ export async function buildPlan(env: Env): Promise<PlanSlot[] | null> {
   });
 }
 
-export interface EnergyResult {
+export interface HeatPumpResult {
   applied: PlanSlot | null;
   plan: PlanSlot[];
+}
+
+/**
+ * One heat pump optimization cycle for one household: recompute the price/
+ * weather plan, store it, and apply the current slot's target — clamped to
+ * the configured band, with a safety override that ignores price entirely
+ * if the room's already below the minimum. A failed control call (or a
+ * missing HA connection) changes nothing and lets the next scheduled run
+ * (30 min later) retry — never throws out to the caller.
+ */
+export async function runHeatPumpOptimization(
+  env: Env,
+  householdId: string,
+  config: HouseholdEnergyConfig
+): Promise<HeatPumpResult> {
+  const plan = await buildPlan(env, config);
+  if (plan.length === 0) {
+    return { applied: null, plan: [] };
+  }
+
+  await env.DB.batch(
+    plan.map((slot) =>
+      env.DB.prepare(
+        `INSERT INTO energy_plans
+           (household_id, slot_start, slot_end, target_temp_c, pence_per_kwh, outside_temp_c, estimated_cop, reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`
+      ).bind(
+        householdId,
+        slot.start,
+        slot.end,
+        slot.targetTempC,
+        slot.pencePerKwh,
+        slot.outsideTempC,
+        slot.estimatedCop,
+        slot.reason
+      )
+    )
+  );
+
+  const nowISO = new Date().toISOString();
+  let applied = plan.find((s) => s.start <= nowISO && nowISO < s.end) ?? plan[0];
+
+  const ha = await getHouseholdHaConfig(env, householdId);
+  if (!ha) {
+    // Configured (buildPlan ran) but no HA connection resolved for this
+    // household right now — store the plan for /energy/status to show,
+    // but there's nothing to actually control.
+    return { applied, plan };
+  }
+
+  try {
+    const roomState = await getEntityState(ha, config.roomTempEntityId);
+    const roomTempC = Number(roomState.state);
+    // Safety floor: if the room is already colder than the configured
+    // minimum, override everything above and boost immediately. Comfort/
+    // safety beats cost optimization, always.
+    if (Number.isFinite(roomTempC) && roomTempC < config.minTempC) {
+      applied = {
+        ...applied,
+        targetTempC: config.maxTempC,
+        reason: `safety override — room is ${roomTempC}°C, below the configured minimum`,
+      };
+    }
+    await controlDevice(ha, "climate", "set_temperature", config.heatpumpEntityId, { temperature: applied.targetTempC });
+  } catch (err) {
+    console.error(`energy optimization: failed to read/set heat pump state for household ${householdId}`, err);
+  }
+
+  return { applied, plan };
+}
+
+/**
+ * Runs a heat pump cycle for every household that's both technically
+ * configured and either paying for the add-on or the bootstrap 'default'
+ * household (see households.ts's listHouseholdsReadyForEnergyOptimization).
+ * One household's failure never blocks another's — each is wrapped
+ * independently, same principle as the per-household try/catch inside
+ * runHeatPumpOptimization itself.
+ */
+export async function runAllHeatPumpOptimizations(env: Env): Promise<void> {
+  const households = await listHouseholdsReadyForEnergyOptimization(env);
+  for (const household of households) {
+    try {
+      await runHeatPumpOptimization(env, household.id, household.energyConfig);
+    } catch (err) {
+      console.error(`energy optimization: heat pump cycle failed for household ${household.id}`, err);
+    }
+  }
+}
+
+export interface SolarEvResult {
   solar: SolarPowerFlow | null;
   evCharging: boolean | null;
 }
 
 /**
- * One optimization cycle. Each piece is independently optional — heat pump
- * scheduling, solar surplus, and EV charging are gated on their own config
- * being present, not on each other, so you can enable just one (e.g. solar
- * isn't installed yet, but the heat pump is) without the others blocking it.
- *
- * Heat pump: recomputes the price/weather plan, stores it, and applies the
- * current slot's target — clamped to the configured band — with a safety
- * override that ignores price if the room's already below the minimum.
- *
- * Solar: if configured, a live surplus (production > consumption right
- * now) overrides the heat pump target to max — free heat beats a merely
- * cheap price. This is reactive to the current reading, not forecast
- * ahead, since SolarEdge's API is for monitoring, not prediction.
- *
- * EV charging: if configured, starts charging while there's solar surplus
- * above the configured threshold and stops when it drops below — solar-
- * surplus-first, no grid-price fallback yet (see docs/energy.md).
+ * Solar surplus tracking + EV charging — still single-tenant (global env
+ * vars, not per-household config), scoped to the 'default' household's own
+ * Home Assistant connection. Not sold as a billed add-on yet (see
+ * docs/energy.md), so this is unchanged from before heat pump optimization
+ * became multi-tenant, just rewired onto the shared homeAssistant.ts client
+ * instead of the old single-purpose ha.ts (now unused, deleted).
  */
-export async function runEnergyOptimization(env: Env): Promise<EnergyResult> {
-  const heatConfig = readConfig(env);
+export async function runSolarAndEvOptimization(env: Env): Promise<SolarEvResult> {
   const evConfig = readEvConfig(env);
-  const ha = new HomeAssistantClient(env);
-
-  let applied: PlanSlot | null = null;
-  let plan: PlanSlot[] = [];
-
-  if (heatConfig) {
-    plan = (await buildPlan(env)) ?? [];
-    if (plan.length > 0) {
-      await env.DB.batch(
-        plan.map((slot) =>
-          env.DB.prepare(
-            `INSERT INTO energy_plans
-               (slot_start, slot_end, target_temp_c, pence_per_kwh, outside_temp_c, estimated_cop, reason)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-          ).bind(
-            slot.start,
-            slot.end,
-            slot.targetTempC,
-            slot.pencePerKwh,
-            slot.outsideTempC,
-            slot.estimatedCop,
-            slot.reason
-          )
-        )
-      );
-
-      const nowISO = new Date().toISOString();
-      applied = plan.find((s) => s.start <= nowISO && nowISO < s.end) ?? plan[0];
-    }
-  }
 
   let solar: SolarPowerFlow | null = null;
   try {
@@ -246,70 +285,42 @@ export async function runEnergyOptimization(env: Env): Promise<EnergyResult> {
     console.error("energy optimization: failed to read SolarEdge power flow", err);
   }
 
-  if (applied && solar && solar.surplusKw > 0.3 && applied.targetTempC < heatConfig!.maxTempC) {
-    applied = {
-      ...applied,
-      targetTempC: heatConfig!.maxTempC,
-      reason: `solar surplus available (${solar.surplusKw.toFixed(1)} kW) — preheating with free power`,
-    };
-  }
-
-  if (applied && heatConfig && ha.isConfigured) {
-    try {
-      const roomState = (await ha.getState(heatConfig.roomTempEntityId)) as { state: string };
-      const roomTempC = Number(roomState.state);
-      // Safety floor: if the room is already colder than the configured
-      // minimum, override everything above and boost immediately. Comfort/
-      // safety beats cost (and solar) optimization, always.
-      if (Number.isFinite(roomTempC) && roomTempC < heatConfig.minTempC) {
-        applied = {
-          ...applied,
-          targetTempC: heatConfig.maxTempC,
-          reason: `safety override — room is ${roomTempC}°C, below the configured minimum`,
-        };
-      }
-      await ha.callService("climate", "set_temperature", {
-        entity_id: heatConfig.heatpumpEntityId,
-        temperature: applied.targetTempC,
-      });
-    } catch (err) {
-      // A failed control call shouldn't take down anything else — the next
-      // scheduled run (30 min later) just tries again.
-      console.error("energy optimization: failed to read/set heat pump state", err);
-    }
-  }
-
   let evCharging: boolean | null = null;
-  if (evConfig && ha.isConfigured && solar) {
-    evCharging = solar.surplusKw >= evConfig.surplusThresholdKw;
-    try {
-      if (evCharging) {
-        await ha.callService(evConfig.startDomain, evConfig.startService, { entity_id: evConfig.entityId });
-      } else {
-        await ha.callService(evConfig.stopDomain, evConfig.stopService, { entity_id: evConfig.entityId });
+  if (evConfig && solar) {
+    const ha = await getHouseholdHaConfig(env, "default");
+    if (ha) {
+      evCharging = solar.surplusKw >= evConfig.surplusThresholdKw;
+      try {
+        if (evCharging) {
+          await controlDevice(ha, evConfig.startDomain, evConfig.startService, evConfig.entityId);
+        } else {
+          await controlDevice(ha, evConfig.stopDomain, evConfig.stopService, evConfig.entityId);
+        }
+        await env.DB.prepare(`INSERT INTO energy_events (household_id, kind, detail) VALUES (?1, ?2, ?3)`)
+          .bind(
+            "default",
+            evCharging ? "ev_charge_start" : "ev_charge_stop",
+            `surplus=${solar.surplusKw.toFixed(2)}kW threshold=${evConfig.surplusThresholdKw}kW`
+          )
+          .run();
+      } catch (err) {
+        // Same principle as the heat pump: don't let a failed control call
+        // break the cycle, just retry next time.
+        console.error("energy optimization: failed to control EV charger", err);
       }
-      await env.DB.prepare(`INSERT INTO energy_events (kind, detail) VALUES (?1, ?2)`)
-        .bind(
-          evCharging ? "ev_charge_start" : "ev_charge_stop",
-          `surplus=${solar.surplusKw.toFixed(2)}kW threshold=${evConfig.surplusThresholdKw}kW`
-        )
-        .run();
-    } catch (err) {
-      // Same principle as the heat pump: don't let a failed control call
-      // break the cycle, just retry next time.
-      console.error("energy optimization: failed to control EV charger", err);
     }
   }
 
-  return { applied, plan, solar, evCharging };
+  return { solar, evCharging };
 }
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-/** GET /energy/status — the most recently computed plan and EV charging history. */
-export async function handleEnergyStatus(env: Env): Promise<Response> {
+/** GET /energy/status — the calling household's most recently computed
+ * plan (and, only for 'default', recent EV events — see runSolarAndEvOptimization). */
+export async function handleEnergyStatus(env: Env, householdId: string): Promise<Response> {
   if (env.ENERGY_OPTIMIZATION_ENABLED !== "true") {
     return json({ enabled: false }, 200);
   }
@@ -317,22 +328,36 @@ export async function handleEnergyStatus(env: Env): Promise<Response> {
     env.DB.prepare(
       `SELECT slot_start, slot_end, target_temp_c, pence_per_kwh, outside_temp_c, estimated_cop, reason
        FROM energy_plans
-       WHERE slot_start >= datetime('now', '-1 hour')
+       WHERE household_id = ?1 AND slot_start >= datetime('now', '-1 hour')
        ORDER BY slot_start ASC
        LIMIT 96`
-    ).all(),
-    env.DB.prepare(`SELECT kind, detail, created_at FROM energy_events ORDER BY created_at DESC LIMIT 20`).all(),
+    )
+      .bind(householdId)
+      .all(),
+    env.DB.prepare(
+      `SELECT kind, detail, created_at FROM energy_events WHERE household_id = ?1 ORDER BY created_at DESC LIMIT 20`
+    )
+      .bind(householdId)
+      .all(),
   ]);
   return json({ enabled: true, plan: plan.results, recentEvents: events.results }, 200);
 }
 
-/** POST /energy/run — force an immediate recompute + apply, e.g. for first-time testing. */
-export async function handleEnergyRun(env: Env): Promise<Response> {
+/** POST /energy/run — force an immediate recompute + apply for the calling
+ * household, e.g. for first-time testing. Requires the household to be
+ * technically configured (its integrator has set up its heat pump — see
+ * docs/integrators.md) AND, unless it's the bootstrap 'default' household,
+ * actually paying for the heating add-on (docs/billing.md) — index.ts
+ * checks both before calling this. Also runs the (still global,
+ * 'default'-only) solar/EV cycle when the calling household *is* 'default'. */
+export async function handleEnergyRun(env: Env, householdId: string, config: HouseholdEnergyConfig): Promise<Response> {
   if (env.ENERGY_OPTIMIZATION_ENABLED !== "true") {
     return json({ error: "energy optimization is not enabled (set the ENERGY_OPTIMIZATION_ENABLED secret to 'true')" }, 409);
   }
   try {
-    return json(await runEnergyOptimization(env), 200);
+    const heatPump = await runHeatPumpOptimization(env, householdId, config);
+    const solarEv = householdId === "default" ? await runSolarAndEvOptimization(env) : { solar: null, evCharging: null };
+    return json({ ...heatPump, ...solarEv }, 200);
   } catch (err) {
     return json({ error: String(err) }, 500);
   }

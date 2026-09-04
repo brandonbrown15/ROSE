@@ -353,8 +353,12 @@ export const DASHBOARD_HTML = `<!doctype html>
       var toggleBtn = document.createElement('button');
       toggleBtn.className = 'secondary';
       toggleBtn.textContent = 'Home Assistant';
+      var energyToggleBtn = document.createElement('button');
+      energyToggleBtn.className = 'secondary';
+      energyToggleBtn.textContent = 'Heating optimization';
       row.appendChild(info);
       row.appendChild(toggleBtn);
+      row.appendChild(energyToggleBtn);
       wrap.appendChild(row);
 
       var haForm = document.createElement('form');
@@ -390,6 +394,62 @@ export const DASHBOARD_HTML = `<!doctype html>
           haForm.querySelector('.ha-token').value = '';
         }).catch(function (err) {
           setStatus(haStatus, 'Could not reach ROSE. (' + err.message + ')', 'error');
+        });
+      });
+
+      // Technical setup for the heating optimization add-on (docs/billing.md)
+      // — the installer wires up which entities and tariff region a
+      // household uses; whether the homeowner is actually paying for it is
+      // entirely separate, set from their own billing portal, not here.
+      var energyForm = document.createElement('form');
+      energyForm.className = 'ha-form hidden-form';
+      energyForm.innerHTML =
+        '<p class="sub" style="margin:0 0 4px;">Needs a Home Assistant connection above already set. This wires up the plumbing — the homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
+        '<label>Heat pump climate entity ID</label>' +
+        '<input type="text" class="energy-heatpump" placeholder="climate.living_room_heat_pump" required>' +
+        '<label>Room temperature sensor entity ID</label>' +
+        '<input type="text" class="energy-roomtemp" placeholder="sensor.living_room_temperature" required>' +
+        '<label>Minimum comfort temperature (°C)</label>' +
+        '<input type="number" class="energy-mintemp" placeholder="18" required>' +
+        '<label>Maximum comfort temperature (°C)</label>' +
+        '<input type="number" class="energy-maxtemp" placeholder="21" required>' +
+        '<label>Octopus Agile region letter (A-P)</label>' +
+        '<input type="text" class="energy-region" placeholder="C" maxlength="1" required>' +
+        '<label>Site latitude</label>' +
+        '<input type="text" class="energy-lat" placeholder="51.5" required>' +
+        '<label>Site longitude</label>' +
+        '<input type="text" class="energy-lon" placeholder="-0.12" required>' +
+        '<button type="submit">Save heating config</button>' +
+        '<div class="status energy-status"></div>';
+      wrap.appendChild(energyForm);
+
+      energyToggleBtn.addEventListener('click', function () {
+        energyForm.classList.toggle('hidden-form');
+      });
+
+      energyForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var energyStatus = energyForm.querySelector('.energy-status');
+        setStatus(energyStatus, 'Saving…', 'muted');
+        api('/integrator/households/' + encodeURIComponent(h.id) + '/energy', {
+          method: 'POST',
+          body: JSON.stringify({
+            heatpump_entity_id: energyForm.querySelector('.energy-heatpump').value.trim(),
+            room_temp_entity_id: energyForm.querySelector('.energy-roomtemp').value.trim(),
+            min_temp_c: Number(energyForm.querySelector('.energy-mintemp').value),
+            max_temp_c: Number(energyForm.querySelector('.energy-maxtemp').value),
+            octopus_region: energyForm.querySelector('.energy-region').value.trim().toUpperCase(),
+            latitude: energyForm.querySelector('.energy-lat').value.trim(),
+            longitude: energyForm.querySelector('.energy-lon').value.trim()
+          })
+        }).then(function (result) {
+          if (!result.ok) {
+            setStatus(energyStatus, result.data.error || 'failed to save', 'error');
+            return;
+          }
+          setStatus(energyStatus, 'Saved.', 'ok');
+        }).catch(function (err) {
+          setStatus(energyStatus, 'Could not reach ROSE. (' + err.message + ')', 'error');
         });
       });
 

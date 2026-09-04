@@ -1,5 +1,3 @@
-import type { Env } from "./index";
-
 export interface AgileRate {
   /** ISO timestamp, UTC, inclusive */
   validFrom: string;
@@ -56,16 +54,22 @@ async function currentAgileProductCode(): Promise<string> {
 }
 
 /**
- * Fetch Agile half-hourly unit rates covering [from, to). No API key is
- * needed — Octopus's tariff rate data is public.
+ * Fetch Agile half-hourly unit rates covering [from, to) for one household's
+ * region. No API key is needed — Octopus's tariff rate data is public.
+ * `region` is per-household (which UK electricity distribution region the
+ * home is in — see households.ts's HouseholdEnergyConfig); `productCodeOverride`
+ * stays a global, optional override (the Agile product code is the same
+ * nationally, only the region letter varies per home) — leave it unset to
+ * auto-detect the currently-live one.
  */
-export async function getAgileRates(env: Env, from: Date, to: Date): Promise<AgileRate[]> {
-  if (!env.OCTOPUS_REGION) {
-    throw new Error("OCTOPUS_REGION is not set (a single letter A–P for your electricity distribution region)");
-  }
-
-  const productCode = env.OCTOPUS_PRODUCT_CODE || (await currentAgileProductCode());
-  const tariffCode = `E-1R-${productCode}-${env.OCTOPUS_REGION}`;
+export async function getAgileRates(
+  region: string,
+  productCodeOverride: string | undefined,
+  from: Date,
+  to: Date
+): Promise<AgileRate[]> {
+  const productCode = productCodeOverride || (await currentAgileProductCode());
+  const tariffCode = `E-1R-${productCode}-${region}`;
 
   const url = new URL(`${OCTOPUS_BASE}/products/${productCode}/electricity-tariffs/${tariffCode}/standard-unit-rates/`);
   url.searchParams.set("period_from", from.toISOString());

@@ -208,11 +208,13 @@ export interface HouseholdBilling {
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   subscriptionStatus: string | null;
+  heatingAddonActive: boolean;
 }
 
 export async function getHouseholdBilling(env: Env, householdId: string): Promise<HouseholdBilling | null> {
   const row = await env.DB.prepare(
-    `SELECT customer_email, stripe_customer_id, stripe_subscription_id, subscription_status FROM households WHERE id = ?1`
+    `SELECT customer_email, stripe_customer_id, stripe_subscription_id, subscription_status, heating_addon_active
+     FROM households WHERE id = ?1`
   )
     .bind(householdId)
     .first<{
@@ -220,6 +222,7 @@ export async function getHouseholdBilling(env: Env, householdId: string): Promis
       stripe_customer_id: string | null;
       stripe_subscription_id: string | null;
       subscription_status: string | null;
+      heating_addon_active: number;
     }>();
   if (!row) return null;
   return {
@@ -227,6 +230,7 @@ export async function getHouseholdBilling(env: Env, householdId: string): Promis
     stripeCustomerId: row.stripe_customer_id,
     stripeSubscriptionId: row.stripe_subscription_id,
     subscriptionStatus: row.subscription_status,
+    heatingAddonActive: row.heating_addon_active === 1,
   };
 }
 
@@ -240,10 +244,13 @@ export async function setHouseholdSubscription(
   env: Env,
   householdId: string,
   stripeSubscriptionId: string,
-  status: string
+  status: string,
+  heatingAddonActive: boolean
 ): Promise<void> {
-  await env.DB.prepare(`UPDATE households SET stripe_subscription_id = ?1, subscription_status = ?2 WHERE id = ?3`)
-    .bind(stripeSubscriptionId, status, householdId)
+  await env.DB.prepare(
+    `UPDATE households SET stripe_subscription_id = ?1, subscription_status = ?2, heating_addon_active = ?3 WHERE id = ?4`
+  )
+    .bind(stripeSubscriptionId, status, heatingAddonActive ? 1 : 0, householdId)
     .run();
 }
 
@@ -258,8 +265,11 @@ export async function findHouseholdByStripeCustomerId(env: Env, stripeCustomerId
 }
 
 /** Update subscription_status by Stripe subscription id rather than
- * household id — some webhook event types carry the subscription id more
- * directly than the customer id in the payload shape index.ts reads. */
+ * household id — some webhook event types (invoice.payment_succeeded/
+ * _failed) carry the subscription id more directly than the customer id in
+ * the payload shape index.ts reads, and don't carry line items at all, so
+ * this never touches heating_addon_active — see
+ * updateSubscriptionAddonsBySubscriptionId for that. */
 export async function updateSubscriptionStatusBySubscriptionId(
   env: Env,
   stripeSubscriptionId: string,
@@ -268,4 +278,173 @@ export async function updateSubscriptionStatusBySubscriptionId(
   await env.DB.prepare(`UPDATE households SET subscription_status = ?1 WHERE stripe_subscription_id = ?2`)
     .bind(status, stripeSubscriptionId)
     .run();
+}
+
+/** Update both subscription_status and heating_addon_active together, by
+ * Stripe subscription id — what index.ts's webhook handler calls for
+ * customer.subscription.* events, whose payload includes the full line-item
+ * list, so it can tell whether the heating add-on price is actually on the
+ * subscription right now (added, removed, or the whole subscription
+ * canceled). */
+export async function updateSubscriptionAddonsBySubscriptionId(
+  env: Env,
+  stripeSubscriptionId: string,
+  status: string,
+  heatingAddonActive: boolean
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE households SET subscription_status = ?1, heating_addon_active = ?2 WHERE stripe_subscription_id = ?3`
+  )
+    .bind(status, heatingAddonActive ? 1 : 0, stripeSubscriptionId)
+    .run();
+}
+
+// --- Per-household heating optimization config -------------------------
+//
+// See migration 0008's comment: what used to be a single global heat pump
+// config (one Worker, one home) is now per-household, reusing each
+// household's own Home Assistant connection (getHouseholdHaConfig above).
+// Solar/EV stay global/single-tenant for now — not sold as a billed add-on
+// yet, see docs/energy.md.
+
+export interface HouseholdEnergyConfig {
+  heatpumpEntityId: string;
+  roomTempEntityId: string;
+  minTempC: number;
+  maxTempC: number;
+  octopusRegion: string;
+  metOfficeLatitude: string;
+  metOfficeLongitude: string;
+}
+
+interface HouseholdEnergyRow {
+  heatpump_entity_id: string | null;
+  room_temp_entity_id: string | null;
+  heating_min_temp_c: number | null;
+  heating_max_temp_c: number | null;
+  octopus_region: string | null;
+  met_office_latitude: string | null;
+  met_office_longitude: string | null;
+}
+
+function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | null {
+  if (
+    !row.heatpump_entity_id ||
+    !row.room_temp_entity_id ||
+    row.heating_min_temp_c === null ||
+    row.heating_max_temp_c === null ||
+    !row.octopus_region ||
+    !row.met_office_latitude ||
+    !row.met_office_longitude
+  ) {
+    return null;
+  }
+  return {
+    heatpumpEntityId: row.heatpump_entity_id,
+    roomTempEntityId: row.room_temp_entity_id,
+    minTempC: row.heating_min_temp_c,
+    maxTempC: row.heating_max_temp_c,
+    octopusRegion: row.octopus_region,
+    metOfficeLatitude: row.met_office_latitude,
+    metOfficeLongitude: row.met_office_longitude,
+  };
+}
+
+/** A household's heating optimization config, or null if any required
+ * field is missing — same "off unless every field is set" pattern as every
+ * other optional feature in this codebase. Does NOT check billing — a
+ * household can have this configured (by its integrator, during setup)
+ * before ever subscribing to the heating add-on; index.ts checks
+ * heating_addon_active separately before actually acting on it. */
+export async function getHouseholdEnergyConfig(env: Env, householdId: string): Promise<HouseholdEnergyConfig | null> {
+  const row = await env.DB.prepare(
+    `SELECT heatpump_entity_id, room_temp_entity_id, heating_min_temp_c, heating_max_temp_c,
+            octopus_region, met_office_latitude, met_office_longitude
+     FROM households WHERE id = ?1`
+  )
+    .bind(householdId)
+    .first<HouseholdEnergyRow>();
+  return row ? rowToEnergyConfig(row) : null;
+}
+
+/** Set (or clear, passing null) a household's heating optimization config —
+ * the integrator dashboard's technical-setup counterpart to
+ * setHouseholdHaConfig, not something a homeowner enters themselves. */
+export async function setHouseholdEnergyConfig(
+  env: Env,
+  householdId: string,
+  config: HouseholdEnergyConfig | null
+): Promise<void> {
+  if (!config) {
+    await env.DB.prepare(
+      `UPDATE households SET heatpump_entity_id = NULL, room_temp_entity_id = NULL, heating_min_temp_c = NULL,
+              heating_max_temp_c = NULL, octopus_region = NULL, met_office_latitude = NULL, met_office_longitude = NULL
+       WHERE id = ?1`
+    )
+      .bind(householdId)
+      .run();
+    return;
+  }
+
+  await env.DB.prepare(
+    `UPDATE households SET heatpump_entity_id = ?1, room_temp_entity_id = ?2, heating_min_temp_c = ?3,
+            heating_max_temp_c = ?4, octopus_region = ?5, met_office_latitude = ?6, met_office_longitude = ?7
+     WHERE id = ?8`
+  )
+    .bind(
+      config.heatpumpEntityId,
+      config.roomTempEntityId,
+      config.minTempC,
+      config.maxTempC,
+      config.octopusRegion,
+      config.metOfficeLatitude,
+      config.metOfficeLongitude,
+      householdId
+    )
+    .run();
+}
+
+export interface HouseholdForEnergy {
+  id: string;
+  heatingAddonActive: boolean;
+  energyConfig: HouseholdEnergyConfig;
+}
+
+/** Every household ready for a heat pump optimization cycle: technical
+ * config fully set AND (the bootstrap 'default' household, exempt from
+ * billing the same way it's exempt from /chat's subscription gate — see
+ * index.ts — OR actually paying: heating_addon_active AND
+ * subscription_status genuinely 'active'/'trialing', not merely
+ * 'incomplete'). That second condition matters — handlePortalStartSubscription
+ * writes heating_addon_active optimistically the moment a homeowner
+ * *chooses* the add-on, before Stripe has actually confirmed payment, so
+ * checking subscription_status too is what stops the cron from touching a
+ * real heat pump before the card's actually been charged. What the
+ * scheduled() cron loops over. */
+export async function listHouseholdsReadyForEnergyOptimization(env: Env): Promise<HouseholdForEnergy[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, heating_addon_active, heatpump_entity_id, room_temp_entity_id, heating_min_temp_c,
+            heating_max_temp_c, octopus_region, met_office_latitude, met_office_longitude
+     FROM households
+     WHERE heatpump_entity_id IS NOT NULL
+       AND room_temp_entity_id IS NOT NULL
+       AND heating_min_temp_c IS NOT NULL
+       AND heating_max_temp_c IS NOT NULL
+       AND octopus_region IS NOT NULL
+       AND met_office_latitude IS NOT NULL
+       AND met_office_longitude IS NOT NULL
+       AND (
+         id = 'default'
+         OR (heating_addon_active = 1 AND subscription_status IN ('active', 'trialing'))
+       )`
+  ).all<HouseholdEnergyRow & { id: string; heating_addon_active: number }>();
+
+  return results
+    .map((row) => {
+      const energyConfig = rowToEnergyConfig(row);
+      return energyConfig
+        ? { id: row.id, heatingAddonActive: row.heating_addon_active === 1, energyConfig }
+        : null;
+    })
+    .filter((h): h is HouseholdForEnergy => h !== null);
 }

@@ -145,10 +145,15 @@ export const BILLING_UI_HTML = `<!doctype html>
   <main>
     <div class="panel">
       <h2>Subscription</h2>
-      <p><span class="badge" id="statusBadge"></span></p>
+      <p><span class="badge" id="statusBadge"></span> <span class="badge" id="heatingBadge" hidden></span></p>
 
       <div id="subscribeSection">
-        <p class="sub" style="margin-top:0;">Add a payment method to activate ROSE for this household.</p>
+        <p class="sub" style="margin-top:0;">£10/month for ROSE — a smart-home assistant for your household.</p>
+        <label class="addon-row" style="display:flex; align-items:flex-start; gap:8px; font-weight:400;">
+          <input type="checkbox" id="heatingAddon" style="width:auto; margin-top:3px;">
+          <span>Add heating optimization (+£15/month) — schedules your heat pump against live Octopus Agile prices and the weather forecast. Only shows up here once your installer has set up the technical side for this household.</span>
+        </label>
+        <p class="sub" id="totalPrice" style="margin:10px 0 0; font-weight:600; color:var(--text);">Total: £10/month</p>
         <label for="card-element">Card</label>
         <div id="card-element"></div>
         <div id="card-errors"></div>
@@ -171,11 +176,18 @@ export const BILLING_UI_HTML = `<!doctype html>
   var claimStatus = document.getElementById('claimStatus');
   var whoamiEl = document.getElementById('whoami');
   var statusBadge = document.getElementById('statusBadge');
+  var heatingBadge = document.getElementById('heatingBadge');
   var subscribeSection = document.getElementById('subscribeSection');
   var notConfigured = document.getElementById('notConfigured');
   var subscribeBtn = document.getElementById('subscribeBtn');
   var subscribeStatus = document.getElementById('subscribeStatus');
   var cardErrors = document.getElementById('card-errors');
+  var heatingAddonCheckbox = document.getElementById('heatingAddon');
+  var totalPriceEl = document.getElementById('totalPrice');
+
+  heatingAddonCheckbox.addEventListener('change', function () {
+    totalPriceEl.textContent = 'Total: ' + (heatingAddonCheckbox.checked ? '£25/month (£10 + £15 heating)' : '£10/month');
+  });
 
   var stripe = null;
   var cardElement = null;
@@ -224,14 +236,22 @@ export const BILLING_UI_HTML = `<!doctype html>
     });
   }
 
-  function showBilling(email, subscriptionStatus) {
+  function showBilling(email, subscriptionStatus, heatingAddonActive) {
     authEl.hidden = true;
     billingEl.hidden = false;
     whoamiEl.textContent = email || '';
     var badge = badgeFor(subscriptionStatus);
     statusBadge.textContent = badge.text;
     statusBadge.className = 'badge ' + badge.cls;
-    subscribeSection.hidden = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
+    var subscribed = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
+    if (subscribed) {
+      heatingBadge.hidden = false;
+      heatingBadge.textContent = heatingAddonActive ? 'Heating: active' : 'Heating: not added';
+      heatingBadge.className = 'badge ' + (heatingAddonActive ? 'active' : 'none');
+    } else {
+      heatingBadge.hidden = true;
+    }
+    subscribeSection.hidden = subscribed;
     if (!subscribeSection.hidden && !stripe) {
       initStripe();
     }
@@ -266,7 +286,7 @@ export const BILLING_UI_HTML = `<!doctype html>
           return;
         }
         setStatus(loginStatus, '', '');
-        showBilling(result.data.email, result.data.subscription_status);
+        showBilling(result.data.email, result.data.subscription_status, result.data.heating_addon_active);
       })
       .catch(function (err) { setStatus(loginStatus, 'Could not reach ROSE. (' + err.message + ')', 'error'); });
   });
@@ -288,7 +308,7 @@ export const BILLING_UI_HTML = `<!doctype html>
           return;
         }
         setStatus(claimStatus, '', '');
-        showBilling(result.data.email, result.data.subscription_status);
+        showBilling(result.data.email, result.data.subscription_status, result.data.heating_addon_active);
       })
       .catch(function (err) { setStatus(claimStatus, 'Could not reach ROSE. (' + err.message + ')', 'error'); });
   });
@@ -298,7 +318,10 @@ export const BILLING_UI_HTML = `<!doctype html>
     subscribeBtn.disabled = true;
     setStatus(subscribeStatus, 'Starting subscription…', 'muted');
 
-    api('/portal/billing/start-subscription', { method: 'POST' })
+    api('/portal/billing/start-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ include_heating: heatingAddonCheckbox.checked })
+    })
       .then(function (result) {
         if (!result.ok) {
           setStatus(subscribeStatus, result.data.error || 'could not start subscription', 'error');
@@ -323,7 +346,7 @@ export const BILLING_UI_HTML = `<!doctype html>
               api('/portal/status').then(function (statusResult) {
                 if (statusResult.ok && (statusResult.data.subscription_status === 'active' || statusResult.data.subscription_status === 'trialing')) {
                   clearInterval(poll);
-                  showBilling(statusResult.data.email, statusResult.data.subscription_status);
+                  showBilling(statusResult.data.email, statusResult.data.subscription_status, statusResult.data.heating_addon_active);
                   setStatus(subscribeStatus, '', '');
                 } else if (attempts >= 8) {
                   clearInterval(poll);
@@ -347,7 +370,7 @@ export const BILLING_UI_HTML = `<!doctype html>
       showAuth();
       return;
     }
-    showBilling(result.data.email, result.data.subscription_status);
+    showBilling(result.data.email, result.data.subscription_status, result.data.heating_addon_active);
   }).catch(function () { showAuth(); });
 })();
 </script>

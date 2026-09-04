@@ -58,6 +58,26 @@ export async function listDevices(ha: HouseholdHaConfig, domain?: string, search
     }));
 }
 
+export interface EntityState {
+  entity_id: string;
+  state: string;
+}
+
+/**
+ * Read one entity's current state directly by id. More precise (and one
+ * request instead of fetching every entity) than listDevices when the exact
+ * entity_id is already known — energy.ts uses this to read a room's
+ * temperature sensor before deciding whether to override the plan's target
+ * with a safety boost.
+ */
+export async function getEntityState(ha: HouseholdHaConfig, entityId: string): Promise<EntityState> {
+  const res = await fetch(`${baseUrl(ha)}/api/states/${entityId}`, { headers: authHeaders(ha) });
+  if (!res.ok) {
+    throw new Error(`Home Assistant /api/states/${entityId} failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * Call a Home Assistant service — the same mechanism HA's own UI, automations,
  * and its built-in voice assistant all use to actually do anything: turn a
