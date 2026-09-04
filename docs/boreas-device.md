@@ -97,16 +97,49 @@ direction is the point it starts actually mattering, since a customer who
 buys a Boreas device presumably isn't buying a voice assistant they'd need
 Home Assistant for anyway.
 
-### 3. Hardware/BOM
+### 3. Hardware/BOM — build vs. buy
 
-Not decided, and not urgent until (1) is answered — but worth naming the
-obvious, well-trodden shape for this kind of device so it's clear it's a
-known-solvable embedded problem, not speculative: a Wi-Fi-and-Bluetooth
-SoC (e.g. an ESP32) paired with a MAX485-style RS485 transceiver and,
-if Ethernet is wanted on the same board rather than Wi-Fi-only, a small
-Ethernet PHY (e.g. W5500) — a standard combination for DIN-rail Modbus
-gateways generally. This needs real component/cost decisions once (1) is
-settled, not before.
+**Decision: don't design a custom PCB for v1.** Researched what's already
+on the market (2026-09-04) rather than assume a custom board was needed,
+and there are two real tiers of existing hardware:
+
+- **Pure protocol gateways** — "dumb" bridges with no custom logic, just
+  Modbus RTU↔TCP/MQTT forwarding: Waveshare's
+  [RS485 to WiFi/ETH module](https://www.waveshare.com/rs485-to-wifi-eth.htm),
+  PUSR's [USR-DR404](https://shop.usriot.com/rs485-to-802.11-a/b/g/n-wlan-serial-device-server-usr-dr404.html),
+  Valtoris's [VT-WF110](https://valtoris.com/product/rs485-wifi-ethernet-converter-din-rail/).
+  These don't run our code — the Worker would need to speak Modbus
+  directly and parse the Samsung register map itself, which doesn't give
+  Open question 1's standalone architecture, just relocates where the
+  Modbus parsing happens.
+- **Programmable, CE-certified ESP32 PLCs** — this is the one that
+  actually fits: an ESP32(-S3), Ethernet, Wi-Fi, RS485 (MAX485-based),
+  DIN-rail enclosure, already CE-marked, and open to writing our own
+  firmware (Arduino/ESP-IDF). Two real options:
+  [Erqos EQSP32CE](https://erqos.com/product/eqsp32ce/) (new as of mid-2026 —
+  ESP32-S3, Ethernet + Wi-Fi + BLE + RS485/RS232 + CAN bus, ~$185/€155
+  single-unit with OEM volume pricing) and
+  [Industrial Shields' ESP32 PLC](https://www.industrialshields.com/industrial-hardware-solutions-based-on-esp32)
+  line (longer track record, open-source hardware, same shape).
+
+**Why buy rather than design a custom board right now:**
+
+- **Certification, not the PCB itself, is the real cost of custom
+  hardware.** This device lives in a customer's electrical consumer
+  unit — that almost certainly needs CE/UKCA marking, possibly EMC/safety
+  testing with a notified body. These boards already carry that
+  certification; using one as-is inherits it instead of paying for it
+  from scratch before a single unit's sold.
+- **It lets the real open question (1 above) get validated in firmware
+  first** — standalone-vs-Home-Assistant-bridge is a protocol/software
+  risk, not a hardware one, and can be piloted entirely on an off-the-
+  shelf board.
+- **Custom PCB only pays off at volume**, once the design is proven and
+  the goal shifts to beating ~$185/unit at scale — premature before
+  Boreas-the-device has sold anything.
+
+Sources: [CNX Software on the EQSP32CE](https://www.cnx-software.com/2026/06/05/erqos-eqsp32ce-an-industrial-iot-esp32-s3-plc-with-ethernet-rs232-rs485-can-bus-din-rail-support/),
+[Industrial Shields' ESP32 PLC technical features](https://www.industrialshields.com/technical-features-industrial-esp32-plc).
 
 ### 4. Device provisioning
 
