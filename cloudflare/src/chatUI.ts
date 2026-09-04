@@ -165,10 +165,12 @@ export const CHAT_UI_HTML = `<!doctype html>
 
   <div id="pinSection" hidden>
     <hr style="border:none;border-top:1px solid var(--border);margin:22px 0 4px;">
-    <label for="pin">Admin PIN</label>
-    <p style="color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 8px;">Required before ROSE will unlock a door or disarm the alarm — one shared PIN for the whole household, 4–8 digits. Setting a new one replaces the old one immediately.</p>
-    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 1003" autocomplete="off">
-    <button id="savePin">Set / update PIN</button>
+    <label for="currentPin">Admin PIN</label>
+    <p style="color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 8px;">Required before ROSE will unlock a door or disarm the alarm — one shared PIN for the whole household, 4–8 digits. Defaults to <code>1003</code> until you set your own. Changing it requires the current one.</p>
+    <input id="currentPin" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="current PIN" autocomplete="off">
+    <label for="newPin">New PIN</label>
+    <input id="newPin" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="4-8 digits" autocomplete="off">
+    <button id="savePin">Update PIN</button>
     <div id="pinStatus" style="font-size:13px;margin-top:10px;min-height:1.2em;"></div>
   </div>
 </div>
@@ -200,7 +202,8 @@ export const CHAT_UI_HTML = `<!doctype html>
   var textInput = document.getElementById('text');
   var sendBtn = document.getElementById('send');
   var pinSection = document.getElementById('pinSection');
-  var pinInput = document.getElementById('pin');
+  var currentPinInput = document.getElementById('currentPin');
+  var newPinInput = document.getElementById('newPin');
   var pinStatus = document.getElementById('pinStatus');
 
   function getConfig() {
@@ -261,10 +264,11 @@ export const CHAT_UI_HTML = `<!doctype html>
   });
 
   document.getElementById('savePin').addEventListener('click', function () {
-    var pin = pinInput.value.trim();
-    if (!/^[0-9]{4,8}$/.test(pin)) {
+    var currentPin = currentPinInput.value.trim();
+    var newPin = newPinInput.value.trim();
+    if (!/^[0-9]{4,8}$/.test(currentPin) || !/^[0-9]{4,8}$/.test(newPin)) {
       pinStatus.style.color = 'var(--error)';
-      pinStatus.textContent = 'PIN must be 4-8 digits.';
+      pinStatus.textContent = 'Both PINs must be 4-8 digits.';
       return;
     }
 
@@ -278,7 +282,7 @@ export const CHAT_UI_HTML = `<!doctype html>
         'Authorization': 'Bearer ' + cfg.key,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ pin: pin })
+      body: JSON.stringify({ current_pin: currentPin, new_pin: newPin })
     })
       .then(function (res) {
         return res.json().then(function (data) { return { ok: res.ok, status: res.status, data: data }; });
@@ -290,8 +294,9 @@ export const CHAT_UI_HTML = `<!doctype html>
           return;
         }
         pinStatus.style.color = 'var(--muted)';
-        pinStatus.textContent = 'PIN saved.';
-        pinInput.value = '';
+        pinStatus.textContent = 'PIN updated.';
+        currentPinInput.value = '';
+        newPinInput.value = '';
       })
       .catch(function (err) {
         pinStatus.style.color = 'var(--error)';
