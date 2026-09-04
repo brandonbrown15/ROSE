@@ -1,6 +1,6 @@
 import { handleChat } from "./chat";
 import { CHAT_UI_HTML } from "./chatUI";
-import { resolveHousehold, setHouseholdPin } from "./households";
+import { resolveHousehold, setHouseholdPin, verifyHouseholdPin } from "./households";
 
 export interface Env {
   DB: D1Database;
@@ -59,8 +59,16 @@ function extractBearerToken(request: Request): string | null {
 
 const PIN_PATTERN = /^\d{4,8}$/;
 
+// Changing the PIN requires proving you know the current one first (which
+// falls back to households.ts's documented default, 1003, for a household
+// that hasn't set its own yet) — the same reason a phone or alarm panel
+// asks for your existing passcode before letting you set a new one: the
+// bearer token alone already gates who can reach this endpoint at all, but
+// requiring the current PIN too means the PIN itself isn't just one
+// request away from being silently swapped out by anything holding that
+// token.
 async function handleSetPin(request: Request, env: Env, householdId: string): Promise<Response> {
-  let body: { pin?: string };
+  let body: { current_pin?: string; new_pin?: string };
   try {
     body = await request.json();
   } catch {
@@ -70,14 +78,27 @@ async function handleSetPin(request: Request, env: Env, householdId: string): Pr
     });
   }
 
-  if (typeof body.pin !== "string" || !PIN_PATTERN.test(body.pin)) {
-    return new Response(JSON.stringify({ error: "'pin' must be 4-8 digits" }), {
+  if (typeof body.current_pin !== "string" || !PIN_PATTERN.test(body.current_pin)) {
+    return new Response(JSON.stringify({ error: "'current_pin' must be 4-8 digits" }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  if (typeof body.new_pin !== "string" || !PIN_PATTERN.test(body.new_pin)) {
+    return new Response(JSON.stringify({ error: "'new_pin' must be 4-8 digits" }), {
       status: 400,
       headers: { "content-type": "application/json" },
     });
   }
 
-  await setHouseholdPin(env, householdId, body.pin);
+  if (!(await verifyHouseholdPin(env, householdId, body.current_pin))) {
+    return new Response(JSON.stringify({ error: "current_pin is incorrect" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  await setHouseholdPin(env, householdId, body.new_pin);
   return new Response(JSON.stringify({ ok: true }), {
     headers: { "content-type": "application/json" },
   });

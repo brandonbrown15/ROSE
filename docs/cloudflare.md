@@ -239,27 +239,38 @@ verification yet. For the two device actions where that isn't good enough
 — unlocking a lock (`unlock`) and disarming the alarm
 (`disarm`) — ROSE additionally requires the household's admin PIN, checked
 in code (`HIGH_RISK_SERVICES` in `chat.ts`), independent of who the
-conversation thinks is speaking or what the model itself decides. No PIN
-set up yet means those two actions are refused outright, not silently
-allowed — a household is never unprotected just because nobody's
-configured this.
+conversation thinks is speaking or what the model itself decides.
 
 One shared PIN per household (the same mental model as a real alarm-panel
-code, not a separate code per person). Set or change it with:
+code, not a separate code per person). **Every household starts with the
+same default PIN, `1003`, until it's changed** — same idea as a router
+shipping with a default admin password: documented here, the same for
+everyone out of the box, and meant to be changed. Change it via the chat
+page's Settings panel (added once you're logged in via the API key), or
+directly:
 
 ```bash
 curl -X POST https://<your-worker>.workers.dev/admin/pin \
   -H "Authorization: Bearer $ROSE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"pin": "4817"}'
+  -d '{"current_pin": "1003", "new_pin": "4817"}'
 ```
 
-4-8 digits. There's no way to read a PIN back once set (only
-`admin_pin_hash`/`admin_pin_salt` are stored, via PBKDF2 — see
-`households.ts`) — set a new one the same way if it's forgotten. In
-conversation, just say the PIN as part of the request ("unlock the front
-door, my code is 4817") — ROSE asks for it if it's missing, and never
-accepts a claimed identity in place of it.
+**Changing the PIN requires the current one** — `current_pin` is checked
+(`verifyHouseholdPin`) before `new_pin` is written, the same way a phone or
+alarm panel makes you enter the existing passcode before setting a new
+one. That check itself falls back to `1003` for a household that hasn't
+set its own yet, so the very first change just needs the default. 4-8
+digits for `new_pin`. There's no way to read the current PIN back once
+it's been changed (only `admin_pin_hash`/`admin_pin_salt` are stored, via
+PBKDF2 — see `households.ts`) — if it's forgotten, that's a manual D1
+reset (`UPDATE households SET admin_pin_hash = NULL, admin_pin_salt = NULL
+WHERE id = ...`), which drops it back to the `1003` default rather than
+locking the household out permanently.
+
+In conversation, just say the PIN as part of the request ("unlock the
+front door, my code is 4817") — ROSE asks for it if it's missing, and
+never accepts a claimed identity in place of it.
 
 This is a second factor for a handful of actions, not a general auth
 system — there's no rate-limiting on guesses beyond the fact that each one

@@ -48,6 +48,14 @@ export async function resolveHousehold(env: Env, token: string): Promise<Househo
 // token calling /chat directly.
 const PBKDF2_ITERATIONS = 100_000;
 
+// A household with no PIN configured yet falls back to this rather than
+// refusing every high-risk action outright — same idea as a router shipping
+// with a default admin password: documented (docs/cloudflare.md), the same
+// for every household until changed, and expected to actually get changed.
+// Changing it (setHouseholdPin via POST /admin/pin) requires providing this
+// current PIN first, same as changing any other PIN — see index.ts.
+const DEFAULT_PIN = "1003";
+
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -87,10 +95,11 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Set (or change) a household's admin PIN. There's no confirmation step or
- * old-PIN check here — this is only reachable via the household's own
- * bearer token (see index.ts's `POST /admin/pin`), which is already the
- * thing that gates who can do this. */
+/** Set (or change) a household's admin PIN. No confirmation step or old-PIN
+ * check happens *here* — index.ts's `POST /admin/pin` handler is
+ * responsible for calling `verifyHouseholdPin` against the caller-supplied
+ * current PIN before ever calling this, so by the time this runs, that's
+ * already been checked. This function just writes the new one. */
 export async function setHouseholdPin(env: Env, householdId: string, pin: string): Promise<void> {
   const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
   const hash = await derivePinHash(pin, salt);
@@ -99,17 +108,15 @@ export async function setHouseholdPin(env: Env, householdId: string, pin: string
     .run();
 }
 
-/** Check a candidate PIN against the household's stored one. False for a
- * household that hasn't set a PIN up yet — deliberately "deny", not
- * "allow", so a household is never silently unprotected just because
- * nobody's configured this. */
+/** Check a candidate PIN against the household's stored one — or, if none
+ * has been set up yet, against DEFAULT_PIN. */
 export async function verifyHouseholdPin(env: Env, householdId: string, pin: string): Promise<boolean> {
   const row = await env.DB.prepare(`SELECT admin_pin_hash, admin_pin_salt FROM households WHERE id = ?1`)
     .bind(householdId)
     .first<{ admin_pin_hash: string | null; admin_pin_salt: string | null }>();
 
   if (!row?.admin_pin_hash || !row.admin_pin_salt) {
-    return false;
+    return timingSafeEqual(pin, DEFAULT_PIN);
   }
 
   const candidate = await derivePinHash(pin, row.admin_pin_salt);
