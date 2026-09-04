@@ -143,28 +143,40 @@ export async function buildPlan(env: Env, config: HouseholdEnergyConfig): Promis
   if (rates.length === 0) return [];
 
   const comfortTempC = (config.minTempC + config.maxTempC) / 2;
+  const heating = config.hvacMode !== "cool";
 
+  // The COP curve (approximateCop) models heat pump *heating* efficiency —
+  // it gets less efficient as it gets colder outside, so a cold cheap slot
+  // isn't necessarily cheap heat. Cooling efficiency doesn't follow that
+  // same shape (or curve at all, without real data), so rather than invert
+  // or reuse a wrong model, cooling mode ranks purely on raw price — see
+  // docs/energy.md's known limitations.
   const scored = rates.map((rate) => {
     const w = nearestWeather(weather, rate.validFrom);
-    const cop = w ? approximateCop(w.outsideTempC) : null;
+    const cop = heating && w ? approximateCop(w.outsideTempC) : null;
     const effectiveCost = cop ? rate.penceIncVat / cop : rate.penceIncVat;
     return { rate, weather: w, cop, effectiveCost };
   });
 
   const byCost = [...scored].sort((a, b) => a.effectiveCost - b.effectiveCost);
   const third = Math.ceil(byCost.length / 3);
-  const boost = new Set(byCost.slice(0, third).map((s) => s.rate.validFrom));
-  const coast = new Set(byCost.slice(byCost.length - third).map((s) => s.rate.validFrom));
+  const cheapest = new Set(byCost.slice(0, third).map((s) => s.rate.validFrom));
+  const priciest = new Set(byCost.slice(byCost.length - third).map((s) => s.rate.validFrom));
 
   return scored.map(({ rate, weather: w, cop }) => {
     let targetTempC = comfortTempC;
     let reason = "mid-priced slot — holding comfort temperature";
-    if (boost.has(rate.validFrom)) {
-      targetTempC = config.maxTempC;
-      reason = "cheap/efficient slot — preheating";
-    } else if (coast.has(rate.validFrom)) {
-      targetTempC = config.minTempC;
-      reason = "expensive/inefficient slot — coasting on stored heat";
+    // Heating: cheap slots preheat toward the max (store heat), expensive
+    // slots coast toward the min. Cooling is the mirror image: cheap slots
+    // pre-cool toward the min (store "coolth"), expensive slots coast
+    // toward the max — pushing a heating household's logic straight onto
+    // an AC unit would preheat it during expensive hours and vice versa.
+    if (cheapest.has(rate.validFrom)) {
+      targetTempC = heating ? config.maxTempC : config.minTempC;
+      reason = heating ? "cheap/efficient slot — preheating" : "cheap slot — pre-cooling";
+    } else if (priciest.has(rate.validFrom)) {
+      targetTempC = heating ? config.minTempC : config.maxTempC;
+      reason = heating ? "expensive/inefficient slot — coasting on stored heat" : "expensive slot — coasting on stored cool";
     }
     // Always clamp to the configured band, no matter what — this is the
     // hard safety limit, not just a heuristic default.
@@ -237,10 +249,19 @@ export async function runHeatPumpOptimization(
   try {
     const roomState = await getEntityState(ha, config.roomTempEntityId);
     const roomTempC = Number(roomState.state);
-    // Safety floor: if the room is already colder than the configured
-    // minimum, override everything above and boost immediately. Comfort/
-    // safety beats cost optimization, always.
-    if (Number.isFinite(roomTempC) && roomTempC < config.minTempC) {
+    // Safety floor (heating) / ceiling (cooling): if the room's already
+    // outside the comfort band in the direction that matters for this
+    // mode — too cold to heat, too hot to cool — override everything above
+    // and act immediately. Comfort/safety beats cost optimization, always.
+    if (config.hvacMode === "cool") {
+      if (Number.isFinite(roomTempC) && roomTempC > config.maxTempC) {
+        applied = {
+          ...applied,
+          targetTempC: config.minTempC,
+          reason: `safety override — room is ${roomTempC}°C, above the configured maximum`,
+        };
+      }
+    } else if (Number.isFinite(roomTempC) && roomTempC < config.minTempC) {
       applied = {
         ...applied,
         targetTempC: config.maxTempC,

@@ -348,6 +348,7 @@ async function handleSetHouseholdEnergy(
     max_temp_c?: number;
     latitude?: string;
     longitude?: string;
+    hvac_mode?: string;
     tariff_type?: string;
     octopus_region?: string;
     manual_default_pence?: number;
@@ -371,6 +372,10 @@ async function handleSetHouseholdEnergy(
   if (typeof body.latitude !== "string" || typeof body.longitude !== "string" || !body.latitude || !body.longitude) {
     return jsonError("'latitude' and 'longitude' are required", 400);
   }
+  if (body.hvac_mode !== undefined && body.hvac_mode !== "heat" && body.hvac_mode !== "cool") {
+    return jsonError("'hvac_mode' must be 'heat' or 'cool' if given", 400);
+  }
+  const hvacMode = body.hvac_mode === "cool" ? "cool" : "heat";
 
   // Octopus Agile's live pricing API, or a manually entered flat/time-of-use
   // schedule for every other supplier — see docs/energy.md for why there's
@@ -404,6 +409,7 @@ async function handleSetHouseholdEnergy(
     maxTempC: body.max_temp_c,
     metOfficeLatitude: body.latitude,
     metOfficeLongitude: body.longitude,
+    hvacMode,
     tariff,
   });
 

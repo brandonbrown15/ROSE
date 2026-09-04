@@ -1,0 +1,12 @@
+-- Cooling (air conditioning) support — the same Home Assistant `climate.*`
+-- entity/service mechanism a heat pump uses (`climate.set_temperature`)
+-- already works identically for an AC unit, but the optimizer's *logic*
+-- was written specifically for heating: cheap slots preheat toward the
+-- max, expensive slots coast toward the min, and the safety floor boosts
+-- when the room gets too cold. All three are backwards for cooling. This
+-- adds a per-household mode so cloudflare/src/energy.ts can flip that
+-- logic rather than silently doing the wrong thing if pointed at an AC.
+--
+-- NOT NULL DEFAULT 'heat' so every household configured before this
+-- migration keeps behaving exactly as it did — nothing changes for them.
+ALTER TABLE households ADD COLUMN hvac_mode TEXT NOT NULL DEFAULT 'heat';

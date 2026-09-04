@@ -1,13 +1,24 @@
-# Energy optimization (heat pump, solar, EV charging)
+# Energy optimization (heat pump/AC, solar, EV charging)
 
 **Off by default, and each piece is independently optional.** A subsystem
 that uses live electricity prices and a Met Office weather forecast to
-decide when to preheat and when to coast a Samsung (or any) heat pump —
-the same idea as Homely, and priced to compete with it directly (see
-[`billing.md`](billing.md#pricing)) — plus two SolarEdge add-ons you can
-layer in once that hardware exists: live solar surplus overriding the
-heat pump schedule ("free heat beats cheap heat"), and solar-surplus-first
-EV charging.
+decide when to preheat/pre-cool and when to coast a Samsung (or any) heat
+pump or air conditioner — the same idea as Homely, and priced to compete
+with it directly (see [`billing.md`](billing.md#pricing)) — plus two
+SolarEdge add-ons you can layer in once that hardware exists: live solar
+surplus overriding the schedule ("free power beats cheap power"), and
+solar-surplus-first EV charging.
+
+**Heating or cooling, per household** — Home Assistant represents a heat
+pump and an AC unit the same way (a `climate.*` entity,
+`climate.set_temperature`), but the optimizer's *logic* is direction-
+sensitive: cheap slots should push a heat pump's target **up** (preheat)
+but an AC's target **down** (pre-cool), and the safety override needs to
+boost heating when the room's too cold but boost cooling when it's too
+hot. A household's `hvac_mode` (`"heat"` or `"cool"`, set alongside its
+other heat pump/AC config — see [Enabling it](#enabling-it)) tells
+`energy.ts` which direction to reason in. Defaults to `"heat"` — every
+household configured before this existed keeps behaving exactly as it did.
 
 **Two ways to price the plan, per household**, since Homely's own claim is
 "works with all tariffs" and matching that honestly needs both:
@@ -94,10 +105,11 @@ SolarEdge directly.
   household's configured `[min, max]` band before it's ever sent to the
   heat pump — the optimizer cannot pick a temperature outside the band you
   set, regardless of price.
-- **Safety floor overrides cost.** If your room sensor reads below the
-  configured minimum when a cycle runs, ROSE ignores the price schedule
-  entirely and boosts to the max — comfort/safety always wins over saving
-  money.
+- **Safety override beats cost.** On heating, if your room sensor reads
+  below the configured minimum when a cycle runs, ROSE ignores the price
+  schedule entirely and boosts to the max. On cooling, the mirror image:
+  above the configured maximum boosts cooling toward the min. Either way,
+  comfort/safety always wins over saving money.
 - **Off by default, and billing-gated per household.** Nothing runs for a
   household — no API calls, no control — unless `ENERGY_OPTIMIZATION_ENABLED`
   is set to `"true"` on the Worker, that household's technical config is
@@ -231,7 +243,7 @@ to make up the difference, and looks like it's not really "surplus-only").
 
 ## Enabling it
 
-**Heat pump scheduling** is per-household config, set the same way as a
+**Heat pump/AC scheduling** is per-household config, set the same way as a
 household's Home Assistant connection — through the integrator dashboard
 (`GET /dashboard`, see [`integrators.md`](integrators.md)), not Worker
 secrets:
@@ -239,7 +251,7 @@ secrets:
 ```
 POST /integrator/households/:id/energy
 
-# On Octopus Agile:
+# Heating, on Octopus Agile:
 {
   "heatpump_entity_id": "climate.living_room_heat_pump",
   "room_temp_entity_id": "sensor.living_room_temperature",
@@ -247,23 +259,31 @@ POST /integrator/households/:id/energy
   "max_temp_c": 21,
   "latitude": "51.5",
   "longitude": "-0.12",
+  "hvac_mode": "heat",
   "tariff_type": "octopus_agile",
   "octopus_region": "C"
 }
 
-# On any other supplier:
+# Cooling, on any other supplier:
 {
-  "heatpump_entity_id": "climate.living_room_heat_pump",
+  "heatpump_entity_id": "climate.living_room_aircon",
   "room_temp_entity_id": "sensor.living_room_temperature",
-  "min_temp_c": 18,
-  "max_temp_c": 21,
+  "min_temp_c": 21,
+  "max_temp_c": 25,
   "latitude": "51.5",
   "longitude": "-0.12",
+  "hvac_mode": "cool",
   "tariff_type": "manual",
   "manual_default_pence": 28.5,
   "manual_off_peak_windows": [{ "start": "00:30", "end": "07:30", "pence": 15.0 }]
 }
 ```
+
+`hvac_mode` defaults to `"heat"` if omitted — matching every household
+configured before this existed. It only flips which direction the
+optimizer pushes toward (see the top of this doc); it never switches the
+unit itself between heating and cooling mode — that's still on the
+household's own thermostat/app, same as any reversible heat pump today.
 
 `manual_off_peak_windows` can be an empty array for a plain flat-rate
 tariff, or list more than one window for something like Economy 10. A
@@ -378,6 +398,18 @@ curl https://<your-worker-url>/energy/status -H "Authorization: Bearer <ROSE_API
 
 ## Known limitations / future work
 
+- **Cooling mode ranks purely on price — no efficiency curve.** Heating's
+  COP curve (`approximateCop`) models a heat pump getting less efficient
+  as it gets colder outside; that shape (and the data behind it) doesn't
+  carry over to air conditioning, so rather than reuse or invent a wrong
+  one, cooling mode skips efficiency weighting entirely for now. A real
+  cooling-efficiency model (units generally get less efficient in extreme
+  heat) is future work.
+- **ROSE doesn't switch a unit between heating and cooling itself.**
+  `hvac_mode` only tells the optimizer which direction to push the target
+  temperature — a reversible heat pump's own mode switch (or an AC's
+  on/off relative to a furnace) is still on the household's own
+  thermostat or existing automations.
 - **A manual tariff is only as accurate as what was entered, and never
   updates itself.** Unlike Octopus Agile's live API, nothing checks a
   manually entered rate against reality — if the household changes tariff,
