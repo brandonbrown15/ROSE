@@ -1,4 +1,4 @@
-import type { Env } from "./index";
+import type { HouseholdHaConfig } from "./households";
 
 export interface Device {
   entity_id: string;
@@ -6,13 +6,13 @@ export interface Device {
   state: string;
 }
 
-function baseUrl(env: Env): string {
-  return (env.HA_URL ?? "").replace(/\/+$/, "");
+function baseUrl(ha: HouseholdHaConfig): string {
+  return ha.url.replace(/\/+$/, "");
 }
 
-function authHeaders(env: Env): Record<string, string> {
+function authHeaders(ha: HouseholdHaConfig): Record<string, string> {
   return {
-    authorization: `Bearer ${env.HA_TOKEN}`,
+    authorization: `Bearer ${ha.token}`,
     "content-type": "application/json",
   };
 }
@@ -24,12 +24,16 @@ function authHeaders(env: Env): Record<string, string> {
  * the model can find the right entity_id before calling `controlDevice` —
  * it doesn't otherwise know what devices exist or what they're called.
  *
+ * `ha` is the calling household's own resolved connection (see
+ * households.ts's getHouseholdHaConfig) — every household can point at a
+ * different Home Assistant instance, so this never reads a global config.
+ *
  * Capped at 100 results: a large HA instance can have hundreds of entities,
  * and dumping all of them into the model's context on every lookup would be
  * wasteful — `domain`/`search` are how the model narrows down instead.
  */
-export async function listDevices(env: Env, domain?: string, search?: string): Promise<Device[]> {
-  const res = await fetch(`${baseUrl(env)}/api/states`, { headers: authHeaders(env) });
+export async function listDevices(ha: HouseholdHaConfig, domain?: string, search?: string): Promise<Device[]> {
+  const res = await fetch(`${baseUrl(ha)}/api/states`, { headers: authHeaders(ha) });
 
   if (!res.ok) {
     throw new Error(`Home Assistant /api/states failed: ${res.status} ${await res.text()}`);
@@ -62,19 +66,22 @@ export async function listDevices(env: Env, domain?: string, search?: string): P
  * "turn_off"); `entityId` is the target; `data` carries any extra service
  * data (e.g. `{ temperature: 68 }` for climate.set_temperature).
  *
+ * `ha` is the calling household's own resolved connection, same as
+ * listDevices above.
+ *
  * Returns a short description of the resulting state(s), so the model can
  * confirm back to the user what actually happened rather than assuming.
  */
 export async function controlDevice(
-  env: Env,
+  ha: HouseholdHaConfig,
   domain: string,
   service: string,
   entityId: string,
   data?: Record<string, unknown>
 ): Promise<string> {
-  const res = await fetch(`${baseUrl(env)}/api/services/${domain}/${service}`, {
+  const res = await fetch(`${baseUrl(ha)}/api/services/${domain}/${service}`, {
     method: "POST",
-    headers: authHeaders(env),
+    headers: authHeaders(ha),
     body: JSON.stringify({ entity_id: entityId, ...data }),
   });
 

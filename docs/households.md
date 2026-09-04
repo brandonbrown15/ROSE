@@ -17,12 +17,27 @@ A new `households` table holds one row per customer:
 
 ```sql
 CREATE TABLE households (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL,
-  api_key     TEXT UNIQUE,   -- the bearer token this household authenticates with
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  api_key             TEXT UNIQUE,   -- the bearer token this household authenticates with
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  admin_pin_hash      TEXT,          -- see docs/cloudflare.md's "Admin PIN"
+  admin_pin_salt      TEXT,
+  integrator_id       TEXT,          -- see docs/integrators.md; NULL = not integrator-managed
+  ha_url              TEXT,          -- this household's own Home Assistant instance
+  ha_token_encrypted  TEXT           -- AES-256-GCM ciphertext, see crypto.ts
 );
 ```
+
+`ha_url`/`ha_token_encrypted` matter more than they might look: earlier,
+`HA_URL`/`HA_TOKEN` were global Worker secrets — one Home Assistant instance
+for the whole backend, which only made sense with a single household. Every
+household now configures its own (see
+[`integrators.md`](integrators.md#managing-a-households-home-assistant-connection)),
+so two customers on the same backend each connect to their own home. The
+old global secrets still work, but only as a fallback for the bootstrap
+`default` household (`households.ts`'s `getHouseholdHaConfig`) — every
+household added since keeps its connection in these two columns instead.
 
 Every `/chat` request authenticates as exactly one household
 (`households.ts`), and every read/write in `chat.ts`, `memory.ts`,
@@ -47,29 +62,42 @@ See `resolveHousehold()` in
 
 ## Adding a new household
 
-There's no signup flow yet — you provision one by hand:
+Two ways now:
 
-```bash
-cd cloudflare
-NEW_ID="$(node -e "console.log(require('crypto').randomUUID())")"
-NEW_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
-npx wrangler d1 execute rose-db --remote --command \
-  "INSERT INTO households (id, name, api_key) VALUES ('$NEW_ID', 'Customer name', '$NEW_KEY')"
-echo "Give this customer: $NEW_KEY"
-```
+1. **Through an integrator account** (the normal path going forward) — see
+   [`integrators.md`](integrators.md). An integrator (installer/dealer) logs
+   into the dashboard API, creates a household under their account, and gets
+   back its `api_key` — no D1 access needed, no talking to you.
+2. **By hand**, still useful for the bootstrap household or one-off cases
+   outside the integrator model:
 
-Hand that key (and this Worker's URL — the same one for every household)
-to the customer. Whether they use the built-in chat page (`GET /`) or the
-Home Assistant integration, all they need is that key — same shape as
-`ROSE_API_KEY` from their point of view, just theirs and theirs alone.
+   ```bash
+   cd cloudflare
+   NEW_ID="$(node -e "console.log(require('crypto').randomUUID())")"
+   NEW_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
+   npx wrangler d1 execute rose-db --remote --command \
+     "INSERT INTO households (id, name, api_key) VALUES ('$NEW_ID', 'Customer name', '$NEW_KEY')"
+   echo "Give this customer: $NEW_KEY"
+   ```
+
+Either way, hand that key (and this Worker's URL — the same one for every
+household) to the customer. Whether they use the built-in chat page
+(`GET /`) or the Home Assistant integration, all they need is that key —
+same shape as `ROSE_API_KEY` from their point of view, just theirs and
+theirs alone.
 
 ## What this deliberately doesn't do (yet)
 
-- **No self-serve signup.** Someone becomes a household because you ran
-  the command above, not by visiting a page and paying.
-- **No billing.** Nothing meters usage or charges anyone.
-- **No admin UI.** Listing/renaming/revoking households means talking to
-  D1 directly (`wrangler d1 execute`).
+- **No self-serve signup for homeowners.** An integrator can create a
+  household through the dashboard API now (see above), but there's still no
+  page where a homeowner signs themselves up directly.
+- **No billing.** Nothing meters usage or charges anyone yet — the
+  integrator layer is the foundation this will build on, not billing
+  itself.
+- **No dashboard UI**, only the API underneath it — see
+  [`integrators.md`](integrators.md) for what exists today
+  (signup/login/household management as JSON endpoints) versus what's next
+  (an actual page to use them from).
 - **Vectorize isn't scoped by household at the database level.** Semantic
   recall (`recall.ts`) over-fetches a wide candidate pool from Vectorize
   (`max(topK * 10, 50)` results) and filters down to the requesting

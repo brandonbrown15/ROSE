@@ -37,11 +37,19 @@ Never put any of these in `wrangler.jsonc` or commit them — set them with
 ```bash
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put ROSE_API_KEY
-# optional, only if the Worker should call back into Home Assistant:
+# optional, only if the Worker should call back into Home Assistant directly
+# (only ever used as a fallback for the bootstrap 'default' household — see
+# docs/integrators.md, every other household configures its own):
 npx wrangler secret put HA_URL
 npx wrangler secret put HA_TOKEN
 # optional, enables the web_search tool — see "Web search" below:
 npx wrangler secret put BRAVE_SEARCH_API_KEY
+# required for the integrator dashboard API (docs/integrators.md) to work
+# at all — signs login session cookies:
+npx wrangler secret put SESSION_SECRET
+# required before any integrator-managed household can configure its own
+# Home Assistant connection — encrypts each household's HA token at rest:
+npx wrangler secret put ENCRYPTION_KEY
 ```
 
 `ROSE_API_KEY` is the shared secret the Home Assistant integration sends as
@@ -49,6 +57,16 @@ npx wrangler secret put BRAVE_SEARCH_API_KEY
 make your own instead (e.g. when rotating it), any 32+ byte random hex
 string works — `openssl rand -hex 32` or
 `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+
+`SESSION_SECRET` and `ENCRYPTION_KEY` want the same shape — 32 random bytes
+as 64 hex characters, `openssl rand -hex 32` — but must be two genuinely
+different values, not the same secret reused: one signs cookies (integrity
+— proving a session wasn't tampered with), the other encrypts tokens
+(confidentiality — hiding their content). Rotating `SESSION_SECRET` logs
+every integrator out at once (see [`integrators.md`](integrators.md));
+rotating `ENCRYPTION_KEY` makes every already-stored Home Assistant token
+undecryptable, so treat that one as effectively permanent once households
+are actually using it.
 
 ## Local development
 
@@ -136,10 +154,11 @@ ROSE now supports multiple households (customers) on this one Worker, D1
 database, and Vectorize index — no separate Cloudflare deployment needed
 per customer. Everything above (the secrets, the variable, the deploy
 workflow) still only applies once, to this one shared backend; adding a
-customer after that is a one-off command, not another round of Cloudflare
-setup. See [`households.md`](households.md) for how households work, how
-to add one, and what's deliberately not built yet (self-serve signup,
-billing, an admin UI).
+customer after that is a one-off API call, not another round of Cloudflare
+setup. See [`households.md`](households.md) for how households work, and
+[`integrators.md`](integrators.md) for the dealer/installer account layer
+that creates and manages them — an integrator's own signup/login/household
+API, the foundation the setup-streamlining and billing work builds on next.
 
 ## API
 
@@ -191,13 +210,25 @@ decision happens after the reply, in the background). See
 
 ### Home Assistant device control
 
-When both `HA_URL` and `HA_TOKEN` are set, ROSE gets two tools it can call
+**Each household connects its own Home Assistant instance** — see
+[`integrators.md`](integrators.md#managing-a-households-home-assistant-connection)
+for the normal way to set this up (`POST /integrator/households/:id/ha`).
+The `HA_URL`/`HA_TOKEN` Worker secrets described below still work, but only
+as a fallback for the bootstrap `default` household — every household
+added since multi-tenancy keeps its own connection in D1 instead (encrypted
+— see `ENCRYPTION_KEY` above), since a single global connection only ever
+made sense when there was exactly one household.
+
+Whichever way a household's connection gets configured, once resolved
+(`households.ts`'s `getHouseholdHaConfig`) ROSE gets two tools it can call
 mid-answer: `list_devices` (look up entities and their current state) and
 `control_device` (actually call a Home Assistant service — turn lights on/
 off, lock/unlock, arm/disarm the alarm, set a thermostat, play media, run a
-scene, anything HA's own service-call mechanism supports). Without both set,
-neither tool is offered and ROSE stays conversation-only, same as before
-this existed.
+scene, anything HA's own service-call mechanism supports). No connection
+resolved for this household means neither tool is offered, and — as of the
+persona split described in [`memory.md`](memory.md#persona--system-prompt)
+— the model is explicitly told it has no real device-control capability
+right now, rather than being left to guess and potentially improvise one.
 
 **This has real, immediate effect on your home** — the model decides for
 itself when to call `control_device`, guided by the system prompt to treat
@@ -216,7 +247,10 @@ Cloudflare's network, not your home network, so a local address like
 pointed at it, or your own reverse proxy with HTTPS — whichever you
 already use (or set up) to reach your instance from outside your LAN.
 
-To turn it on:
+To turn it on for the **default** household (the global-secret fallback
+path — for any integrator-managed household, use
+[`POST /integrator/households/:id/ha`](integrators.md#managing-a-households-home-assistant-connection)
+instead):
 
 1. In Home Assistant: **Profile → Security → Long-lived access tokens →
    Create token**. Copy it — HA only shows it once.

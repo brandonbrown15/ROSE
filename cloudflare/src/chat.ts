@@ -2,7 +2,7 @@ import type { Env } from "./index";
 import { distillMemory } from "./distill";
 import { findSimilarMemory } from "./dedupe";
 import { controlDevice, listDevices } from "./homeAssistant";
-import { verifyHouseholdPin } from "./households";
+import { getHouseholdHaConfig, verifyHouseholdPin, type HouseholdHaConfig } from "./households";
 import { identifySpeaker } from "./identify";
 import {
   embed,
@@ -50,12 +50,24 @@ interface ChatCompletionMessage {
   tool_call_id?: string;
 }
 
+// Everything a tool call needs to run, resolved once per request in
+// handleChat rather than re-derived per tool: `env` for API keys/D1/etc,
+// `householdId` for scoping, and `haConfig` — the calling household's own
+// Home Assistant connection (households.ts's getHouseholdHaConfig), which
+// requires a D1 read + decrypt, so it's fetched once up front instead of
+// inside each tool's own `enabled`/`run`.
+interface ToolContext {
+  env: Env;
+  householdId: string;
+  haConfig: HouseholdHaConfig | null;
+}
+
 // Tool definitions handed to the model, each paired with `enabled` (whether
-// the backing service is configured) and `run` (what actually executing it
-// does). Only enabled tools are sent to the API at all — see
-// `availableTools` below — so ROSE degrades gracefully to whatever's
-// actually configured (e.g. no Home Assistant, or no search key) rather
-// than offering a tool that would just fail every time.
+// the backing service is configured for this request) and `run` (what
+// actually executing it does). Only enabled tools are sent to the API at
+// all — see `availableTools` below — so ROSE degrades gracefully to
+// whatever's actually configured (e.g. no Home Assistant, or no search key)
+// rather than offering a tool that would just fail every time.
 interface ToolDef {
   spec: {
     type: "function";
@@ -65,12 +77,8 @@ interface ToolDef {
       parameters: Record<string, unknown>;
     };
   };
-  enabled: (env: Env) => boolean;
-  // householdId is only used by control_device's high-risk PIN check today
-  // (see HIGH_RISK_SERVICES below) — passed to every tool for a consistent
-  // signature rather than threading it through some ToolDefs and not
-  // others.
-  run: (env: Env, args: Record<string, unknown>, householdId: string) => Promise<string>;
+  enabled: (ctx: ToolContext) => boolean;
+  run: (ctx: ToolContext, args: Record<string, unknown>) => Promise<string>;
 }
 
 const WEB_SEARCH: ToolDef = {
@@ -93,13 +101,12 @@ const WEB_SEARCH: ToolDef = {
       },
     },
   },
-  enabled: (env) => Boolean(env.BRAVE_SEARCH_API_KEY),
-  run: async (env, args) => {
-    // householdId unused — web search has nothing to scope or gate.
+  enabled: (ctx) => Boolean(ctx.env.BRAVE_SEARCH_API_KEY),
+  run: async (ctx, args) => {
     const query = args.query as string | undefined;
     if (!query) return "web_search failed: no query provided";
 
-    const results = await webSearch(env, query);
+    const results = await webSearch(ctx.env, query);
     if (results.length === 0) return "No results found.";
     return results.map((r) => `- ${r.title} (${r.url})\n  ${r.snippet}`).join("\n");
   },
@@ -127,10 +134,9 @@ const LIST_DEVICES: ToolDef = {
       },
     },
   },
-  enabled: (env) => Boolean(env.HA_URL && env.HA_TOKEN),
-  run: async (env, args) => {
-    // householdId unused — listing devices is read-only, nothing to gate.
-    const devices = await listDevices(env, args.domain as string | undefined, args.search as string | undefined);
+  enabled: (ctx) => ctx.haConfig !== null,
+  run: async (ctx, args) => {
+    const devices = await listDevices(ctx.haConfig!, args.domain as string | undefined, args.search as string | undefined);
     if (devices.length === 0) return "No matching devices found.";
     return devices.map((d) => `${d.entity_id} "${d.name}" — ${d.state}`).join("\n");
   },
@@ -186,8 +192,8 @@ const CONTROL_DEVICE: ToolDef = {
       },
     },
   },
-  enabled: (env) => Boolean(env.HA_URL && env.HA_TOKEN),
-  run: async (env, args, householdId) => {
+  enabled: (ctx) => ctx.haConfig !== null,
+  run: async (ctx, args) => {
     const {
       domain,
       service,
@@ -215,7 +221,8 @@ const CONTROL_DEVICE: ToolDef = {
     const pin = typeof rawPin === "string" || typeof rawPin === "number" ? String(rawPin).trim() : undefined;
 
     if (HIGH_RISK_SERVICES.has(service.toLowerCase())) {
-      const verified = typeof pin === "string" && pin.length > 0 && (await verifyHouseholdPin(env, householdId, pin));
+      const verified =
+        typeof pin === "string" && pin.length > 0 && (await verifyHouseholdPin(ctx.env, ctx.householdId, pin));
       if (!verified) {
         return (
           "control_device failed: this action requires the household admin PIN, " +
@@ -225,21 +232,21 @@ const CONTROL_DEVICE: ToolDef = {
       }
     }
 
-    return controlDevice(env, domain, service, entityId, data);
+    return controlDevice(ctx.haConfig!, domain, service, entityId, data);
   },
 };
 
 const ALL_TOOLS: ToolDef[] = [WEB_SEARCH, LIST_DEVICES, CONTROL_DEVICE];
 
-function availableTools(env: Env): ToolDef[] {
-  return ALL_TOOLS.filter((t) => t.enabled(env));
+function availableTools(ctx: ToolContext): ToolDef[] {
+  return ALL_TOOLS.filter((t) => t.enabled(ctx));
 }
 
 /** Run one tool call and turn its result (or failure) into the string a
  * "tool" message reports back to the model. Never throws — a failed call
  * just gets described as one to the model, which can tell the user rather
  * than the whole request failing. */
-async function runTool(env: Env, tools: ToolDef[], call: ToolCall, householdId: string): Promise<string> {
+async function runTool(tools: ToolDef[], call: ToolCall, ctx: ToolContext): Promise<string> {
   const tool = tools.find((t) => t.spec.function.name === call.function.name);
   if (!tool) {
     return `Unknown tool: ${call.function.name}`;
@@ -247,7 +254,7 @@ async function runTool(env: Env, tools: ToolDef[], call: ToolCall, householdId: 
 
   try {
     const args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-    return await tool.run(env, args, householdId);
+    return await tool.run(ctx, args);
   } catch (err) {
     return `${call.function.name} failed: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -401,12 +408,12 @@ async function requestCompletion(
  * otherwise turn one /chat request into an unbounded number of upstream
  * calls (OpenAI + whatever the tool hits).
  */
-async function completeChat(env: Env, messages: ChatCompletionMessage[], householdId: string): Promise<string> {
-  const tools = availableTools(env);
+async function completeChat(ctx: ToolContext, messages: ChatCompletionMessage[]): Promise<string> {
+  const tools = availableTools(ctx);
   const conversation = [...messages];
 
   for (let round = 0; round < 5; round++) {
-    const turn = await requestCompletion(env, conversation, tools);
+    const turn = await requestCompletion(ctx.env, conversation, tools);
 
     if (!turn.tool_calls || turn.tool_calls.length === 0) {
       return turn.content ?? "";
@@ -414,7 +421,7 @@ async function completeChat(env: Env, messages: ChatCompletionMessage[], househo
 
     conversation.push({ role: "assistant", content: turn.content, tool_calls: turn.tool_calls });
 
-    const results = await Promise.all(turn.tool_calls.map((call) => runTool(env, tools, call, householdId)));
+    const results = await Promise.all(turn.tool_calls.map((call) => runTool(tools, call, ctx)));
     for (const [i, call] of turn.tool_calls.entries()) {
       conversation.push({ role: "tool", tool_call_id: call.id, content: results[i] });
     }
@@ -511,17 +518,20 @@ export async function handleChat(
     resolvedPerson = await findOrCreatePerson(env, householdId, identified.name);
   }
 
-  const memories = await recall(env, body.text, resolvedPerson?.id ?? null, householdId);
+  const [memories, haConfig] = await Promise.all([
+    recall(env, body.text, resolvedPerson?.id ?? null, householdId),
+    getHouseholdHaConfig(env, householdId),
+  ]);
 
-  // Same check CONTROL_DEVICE.enabled uses to decide whether the tool is
-  // actually offered this request — the system prompt's device-control
-  // guidance needs to match that exactly, not just describe it in prose,
-  // or the model can end up confidently narrating a PIN-gated unlock
-  // conversation with no real tool behind it at all.
-  const deviceControlAvailable = Boolean(env.HA_URL && env.HA_TOKEN);
+  // Resolved once here — both what the system prompt says about device
+  // control and what CONTROL_DEVICE/LIST_DEVICES.enabled actually offer as
+  // tools read from this same value, so they can never disagree (the bug
+  // that let ROSE roleplay an entire PIN-gated unlock conversation with no
+  // real tool behind it, before this was fixed).
+  const toolContext: ToolContext = { env, householdId, haConfig };
 
   const messages: ChatCompletionMessage[] = [
-    { role: "system", content: buildSystemPrompt(resolvedPerson?.name ?? null, deviceControlAvailable) },
+    { role: "system", content: buildSystemPrompt(resolvedPerson?.name ?? null, haConfig !== null) },
   ];
 
   if (memories.length > 0) {
@@ -538,7 +548,7 @@ export async function handleChat(
 
   messages.push(...history, { role: "user", content: body.text });
 
-  const reply = await completeChat(env, messages, householdId);
+  const reply = await completeChat(toolContext, messages);
 
   // Persist the exchange for short-term context on the next turn, and
   // decide whether it's worth remembering long-term. All of this runs after
