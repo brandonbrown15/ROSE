@@ -193,17 +193,26 @@ const CONTROL_DEVICE: ToolDef = {
       service,
       entity_id: entityId,
       data,
-      pin,
+      pin: rawPin,
     } = args as {
       domain?: string;
       service?: string;
       entity_id?: string;
       data?: Record<string, unknown>;
-      pin?: string;
+      pin?: string | number;
     };
     if (!domain || !service || !entityId) {
       return "control_device failed: domain, service, and entity_id are all required";
     }
+
+    // The tool spec declares `pin` as a JSON string, but the model doesn't
+    // reliably honor that for anything that looks numeric — "1003" as often
+    // comes back as the bare number 1003. `as {...}` above only tells
+    // TypeScript what to assume; it does nothing at runtime, so a strict
+    // `typeof pin === "string"` check would silently reject a perfectly
+    // correct PIN just because the model happened to emit it unquoted.
+    // Coerce either shape to a string before comparing.
+    const pin = typeof rawPin === "string" || typeof rawPin === "number" ? String(rawPin).trim() : undefined;
 
     if (HIGH_RISK_SERVICES.has(service.toLowerCase())) {
       const verified = typeof pin === "string" && pin.length > 0 && (await verifyHouseholdPin(env, householdId, pin));
