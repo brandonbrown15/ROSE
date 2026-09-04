@@ -162,6 +162,15 @@ export const CHAT_UI_HTML = `<!doctype html>
   <label for="key">API Key</label>
   <input id="key" type="password" placeholder="your ROSE_API_KEY" autocomplete="off">
   <button id="save">Save &amp; start chatting</button>
+
+  <div id="pinSection" hidden>
+    <hr style="border:none;border-top:1px solid var(--border);margin:22px 0 4px;">
+    <label for="pin">Admin PIN</label>
+    <p style="color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 8px;">Required before ROSE will unlock a door or disarm the alarm — one shared PIN for the whole household, 4–8 digits. Setting a new one replaces the old one immediately.</p>
+    <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" placeholder="e.g. 1003" autocomplete="off">
+    <button id="savePin">Set / update PIN</button>
+    <div id="pinStatus" style="font-size:13px;margin-top:10px;min-height:1.2em;"></div>
+  </div>
 </div>
 
 <div id="chat" hidden style="display:flex; flex-direction:column; height:100%;">
@@ -190,6 +199,9 @@ export const CHAT_UI_HTML = `<!doctype html>
   var form = document.getElementById('composer');
   var textInput = document.getElementById('text');
   var sendBtn = document.getElementById('send');
+  var pinSection = document.getElementById('pinSection');
+  var pinInput = document.getElementById('pin');
+  var pinStatus = document.getElementById('pinStatus');
 
   function getConfig() {
     try {
@@ -224,6 +236,9 @@ export const CHAT_UI_HTML = `<!doctype html>
   function showSetup() {
     chatEl.hidden = true;
     setupEl.hidden = false;
+    // Only offer the PIN section once a key already exists — before that,
+    // there's nothing to authenticate the /admin/pin request with yet.
+    pinSection.hidden = !getConfig().key;
   }
 
   document.getElementById('save').addEventListener('click', function () {
@@ -243,6 +258,45 @@ export const CHAT_UI_HTML = `<!doctype html>
 
   document.getElementById('settings').addEventListener('click', function () {
     showSetup();
+  });
+
+  document.getElementById('savePin').addEventListener('click', function () {
+    var pin = pinInput.value.trim();
+    if (!/^[0-9]{4,8}$/.test(pin)) {
+      pinStatus.style.color = 'var(--error)';
+      pinStatus.textContent = 'PIN must be 4-8 digits.';
+      return;
+    }
+
+    var cfg = getConfig();
+    pinStatus.style.color = 'var(--muted)';
+    pinStatus.textContent = 'Saving…';
+
+    fetch('/admin/pin', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + cfg.key,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ pin: pin })
+    })
+      .then(function (res) {
+        return res.json().then(function (data) { return { ok: res.ok, status: res.status, data: data }; });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          pinStatus.style.color = 'var(--error)';
+          pinStatus.textContent = 'Error: ' + (result.data && result.data.error ? result.data.error : 'request failed');
+          return;
+        }
+        pinStatus.style.color = 'var(--muted)';
+        pinStatus.textContent = 'PIN saved.';
+        pinInput.value = '';
+      })
+      .catch(function (err) {
+        pinStatus.style.color = 'var(--error)';
+        pinStatus.textContent = 'Could not reach ROSE. (' + err.message + ')';
+      });
   });
 
   document.getElementById('newConvo').addEventListener('click', function () {
