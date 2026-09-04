@@ -16,8 +16,10 @@ import {
   findHouseholdByStripeCustomerId,
   getHouseholdBilling,
   getHouseholdEnergyConfig,
+  type HouseholdEnergyConfig,
   householdBelongsToIntegrator,
   listIntegratorHouseholds,
+  type OffPeakWindow,
   resolveHousehold,
   setHouseholdEnergyConfig,
   setHouseholdHaConfig,
@@ -344,9 +346,12 @@ async function handleSetHouseholdEnergy(
     room_temp_entity_id?: string;
     min_temp_c?: number;
     max_temp_c?: number;
-    octopus_region?: string;
     latitude?: string;
     longitude?: string;
+    tariff_type?: string;
+    octopus_region?: string;
+    manual_default_pence?: number;
+    manual_off_peak_windows?: { start?: string; end?: string; pence?: number }[];
   };
   try {
     body = await request.json();
@@ -363,11 +368,33 @@ async function handleSetHouseholdEnergy(
   if (typeof body.min_temp_c !== "number" || typeof body.max_temp_c !== "number" || body.min_temp_c >= body.max_temp_c) {
     return jsonError("'min_temp_c' and 'max_temp_c' are required numbers, with min_temp_c < max_temp_c", 400);
   }
-  if (typeof body.octopus_region !== "string" || !/^[A-P]$/.test(body.octopus_region)) {
-    return jsonError("'octopus_region' must be a single letter A-P", 400);
-  }
   if (typeof body.latitude !== "string" || typeof body.longitude !== "string" || !body.latitude || !body.longitude) {
     return jsonError("'latitude' and 'longitude' are required", 400);
+  }
+
+  // Octopus Agile's live pricing API, or a manually entered flat/time-of-use
+  // schedule for every other supplier — see docs/energy.md for why there's
+  // no live equivalent for them. Exactly one of the two shapes below.
+  let tariff: HouseholdEnergyConfig["tariff"];
+  if (body.tariff_type === "manual") {
+    if (typeof body.manual_default_pence !== "number") {
+      return jsonError("'manual_default_pence' is required when tariff_type is 'manual'", 400);
+    }
+    const windows = body.manual_off_peak_windows ?? [];
+    if (!Array.isArray(windows) || !windows.every(isValidOffPeakWindow)) {
+      return jsonError(
+        "'manual_off_peak_windows' must be an array of { start: 'HH:MM', end: 'HH:MM', pence: number }",
+        400
+      );
+    }
+    tariff = { type: "manual", defaultPence: body.manual_default_pence, offPeakWindows: windows };
+  } else if (!body.tariff_type || body.tariff_type === "octopus_agile") {
+    if (typeof body.octopus_region !== "string" || !/^[A-P]$/.test(body.octopus_region)) {
+      return jsonError("'octopus_region' must be a single letter A-P when tariff_type is 'octopus_agile'", 400);
+    }
+    tariff = { type: "octopus_agile", octopusRegion: body.octopus_region };
+  } else {
+    return jsonError("'tariff_type' must be 'octopus_agile' or 'manual'", 400);
   }
 
   await setHouseholdEnergyConfig(env, householdId, {
@@ -375,12 +402,24 @@ async function handleSetHouseholdEnergy(
     roomTempEntityId: body.room_temp_entity_id,
     minTempC: body.min_temp_c,
     maxTempC: body.max_temp_c,
-    octopusRegion: body.octopus_region,
     metOfficeLatitude: body.latitude,
     metOfficeLongitude: body.longitude,
+    tariff,
   });
 
   return jsonOk({ ok: true });
+}
+
+const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function isValidOffPeakWindow(w: { start?: string; end?: string; pence?: number }): w is OffPeakWindow {
+  return (
+    typeof w.start === "string" &&
+    HHMM_PATTERN.test(w.start) &&
+    typeof w.end === "string" &&
+    HHMM_PATTERN.test(w.end) &&
+    typeof w.pence === "number"
+  );
 }
 
 // --- Customer billing portal API ---------------------------------------------

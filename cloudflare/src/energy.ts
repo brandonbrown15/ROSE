@@ -2,7 +2,8 @@ import type { Env } from "./index";
 import type { HouseholdEnergyConfig } from "./households";
 import { getHouseholdHaConfig, listHouseholdsReadyForEnergyOptimization } from "./households";
 import { controlDevice, getEntityState } from "./homeAssistant";
-import { getAgileRates } from "./octopus";
+import { getManualTariffRates } from "./manualTariff";
+import { getAgileRates, type AgileRate } from "./octopus";
 import { getHourlyForecast, type WeatherPoint } from "./metoffice";
 import { getCurrentPowerFlow, type SolarPowerFlow } from "./solaredge";
 
@@ -115,8 +116,19 @@ export async function buildPlan(env: Env, config: HouseholdEnergyConfig): Promis
   const now = new Date();
   const horizon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
+  // Octopus Agile's live half-hourly API, or a household's own manually
+  // entered flat/time-of-use schedule (households.ts's HouseholdTariff) —
+  // see manualTariff.ts's comment for why there's no live equivalent for
+  // every other supplier. Both produce the same AgileRate[] shape, so
+  // everything below (ranking, weather, classification) doesn't care which
+  // one this household is on.
+  const ratesPromise: Promise<AgileRate[]> =
+    config.tariff.type === "octopus_agile"
+      ? getAgileRates(config.tariff.octopusRegion, env.OCTOPUS_PRODUCT_CODE, now, horizon)
+      : Promise.resolve(getManualTariffRates(config.tariff, now, horizon));
+
   const [rates, weather] = await Promise.all([
-    getAgileRates(config.octopusRegion, env.OCTOPUS_PRODUCT_CODE, now, horizon),
+    ratesPromise,
     // Weather sharpens the ranking but isn't load-bearing — if Met Office
     // is unreachable/misconfigured, fall back to ranking on price alone
     // rather than failing the whole plan. Also a no-op cleanly if

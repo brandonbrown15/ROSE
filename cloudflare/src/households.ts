@@ -307,14 +307,32 @@ export async function updateSubscriptionAddonsBySubscriptionId(
 // Solar/EV stay global/single-tenant for now — not sold as a billed add-on
 // yet, see docs/energy.md.
 
+// Octopus Agile is the only major UK supplier with a public, free, live
+// half-hourly dynamic pricing API — every other tariff (Economy 7/10, OVO
+// Charge Anytime, EDF GoElectric, a plain flat rate) has no equivalent to
+// pull live, so "any tariff" (matching Homely's own claim, see
+// docs/energy.md) means a manually entered schedule as the alternative,
+// which the optimizer schedules against the same way, just without
+// reacting to live price changes there aren't any of.
+
+export interface OffPeakWindow {
+  start: string; // "HH:MM", local time
+  end: string; // "HH:MM", local time
+  pence: number; // pence/kWh during this window
+}
+
+export type HouseholdTariff =
+  | { type: "octopus_agile"; octopusRegion: string }
+  | { type: "manual"; defaultPence: number; offPeakWindows: OffPeakWindow[] };
+
 export interface HouseholdEnergyConfig {
   heatpumpEntityId: string;
   roomTempEntityId: string;
   minTempC: number;
   maxTempC: number;
-  octopusRegion: string;
   metOfficeLatitude: string;
   metOfficeLongitude: string;
+  tariff: HouseholdTariff;
 }
 
 interface HouseholdEnergyRow {
@@ -322,9 +340,30 @@ interface HouseholdEnergyRow {
   room_temp_entity_id: string | null;
   heating_min_temp_c: number | null;
   heating_max_temp_c: number | null;
-  octopus_region: string | null;
   met_office_latitude: string | null;
   met_office_longitude: string | null;
+  tariff_type: string;
+  octopus_region: string | null;
+  manual_tariff_default_pence: number | null;
+  manual_tariff_off_peak_json: string | null;
+}
+
+/** Parses manual_tariff_off_peak_json, discarding anything malformed rather
+ * than throwing — a corrupted or hand-edited value should degrade to "no
+ * off-peak windows" (falls back to the flat default rate), not break the
+ * whole optimizer for this household. */
+function parseOffPeakWindows(json: string | null): OffPeakWindow[] {
+  if (!json) return [];
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (w): w is OffPeakWindow =>
+        Boolean(w) && typeof w.start === "string" && typeof w.end === "string" && typeof w.pence === "number"
+    );
+  } catch {
+    return [];
+  }
 }
 
 function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | null {
@@ -333,22 +372,39 @@ function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | nul
     !row.room_temp_entity_id ||
     row.heating_min_temp_c === null ||
     row.heating_max_temp_c === null ||
-    !row.octopus_region ||
     !row.met_office_latitude ||
     !row.met_office_longitude
   ) {
     return null;
   }
+
+  let tariff: HouseholdTariff;
+  if (row.tariff_type === "manual") {
+    if (row.manual_tariff_default_pence === null) return null;
+    tariff = {
+      type: "manual",
+      defaultPence: row.manual_tariff_default_pence,
+      offPeakWindows: parseOffPeakWindows(row.manual_tariff_off_peak_json),
+    };
+  } else {
+    if (!row.octopus_region) return null;
+    tariff = { type: "octopus_agile", octopusRegion: row.octopus_region };
+  }
+
   return {
     heatpumpEntityId: row.heatpump_entity_id,
     roomTempEntityId: row.room_temp_entity_id,
     minTempC: row.heating_min_temp_c,
     maxTempC: row.heating_max_temp_c,
-    octopusRegion: row.octopus_region,
     metOfficeLatitude: row.met_office_latitude,
     metOfficeLongitude: row.met_office_longitude,
+    tariff,
   };
 }
+
+const ENERGY_ROW_COLUMNS = `heatpump_entity_id, room_temp_entity_id, heating_min_temp_c, heating_max_temp_c,
+            met_office_latitude, met_office_longitude, tariff_type, octopus_region,
+            manual_tariff_default_pence, manual_tariff_off_peak_json`;
 
 /** A household's heating optimization config, or null if any required
  * field is missing — same "off unless every field is set" pattern as every
@@ -357,11 +413,7 @@ function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | nul
  * before ever subscribing to the heating add-on; index.ts checks
  * heating_addon_active separately before actually acting on it. */
 export async function getHouseholdEnergyConfig(env: Env, householdId: string): Promise<HouseholdEnergyConfig | null> {
-  const row = await env.DB.prepare(
-    `SELECT heatpump_entity_id, room_temp_entity_id, heating_min_temp_c, heating_max_temp_c,
-            octopus_region, met_office_latitude, met_office_longitude
-     FROM households WHERE id = ?1`
-  )
+  const row = await env.DB.prepare(`SELECT ${ENERGY_ROW_COLUMNS} FROM households WHERE id = ?1`)
     .bind(householdId)
     .first<HouseholdEnergyRow>();
   return row ? rowToEnergyConfig(row) : null;
@@ -369,7 +421,10 @@ export async function getHouseholdEnergyConfig(env: Env, householdId: string): P
 
 /** Set (or clear, passing null) a household's heating optimization config —
  * the integrator dashboard's technical-setup counterpart to
- * setHouseholdHaConfig, not something a homeowner enters themselves. */
+ * setHouseholdHaConfig, not something a homeowner enters themselves.
+ * Always writes every tariff-related column (clearing whichever kind isn't
+ * in use) so switching a household from one tariff type to the other never
+ * leaves stale data behind from the previous type. */
 export async function setHouseholdEnergyConfig(
   env: Env,
   householdId: string,
@@ -378,7 +433,9 @@ export async function setHouseholdEnergyConfig(
   if (!config) {
     await env.DB.prepare(
       `UPDATE households SET heatpump_entity_id = NULL, room_temp_entity_id = NULL, heating_min_temp_c = NULL,
-              heating_max_temp_c = NULL, octopus_region = NULL, met_office_latitude = NULL, met_office_longitude = NULL
+              heating_max_temp_c = NULL, met_office_latitude = NULL, met_office_longitude = NULL,
+              tariff_type = 'octopus_agile', octopus_region = NULL,
+              manual_tariff_default_pence = NULL, manual_tariff_off_peak_json = NULL
        WHERE id = ?1`
     )
       .bind(householdId)
@@ -386,19 +443,27 @@ export async function setHouseholdEnergyConfig(
     return;
   }
 
+  const octopusRegion = config.tariff.type === "octopus_agile" ? config.tariff.octopusRegion : null;
+  const manualDefaultPence = config.tariff.type === "manual" ? config.tariff.defaultPence : null;
+  const manualOffPeakJson = config.tariff.type === "manual" ? JSON.stringify(config.tariff.offPeakWindows) : null;
+
   await env.DB.prepare(
     `UPDATE households SET heatpump_entity_id = ?1, room_temp_entity_id = ?2, heating_min_temp_c = ?3,
-            heating_max_temp_c = ?4, octopus_region = ?5, met_office_latitude = ?6, met_office_longitude = ?7
-     WHERE id = ?8`
+            heating_max_temp_c = ?4, met_office_latitude = ?5, met_office_longitude = ?6, tariff_type = ?7,
+            octopus_region = ?8, manual_tariff_default_pence = ?9, manual_tariff_off_peak_json = ?10
+     WHERE id = ?11`
   )
     .bind(
       config.heatpumpEntityId,
       config.roomTempEntityId,
       config.minTempC,
       config.maxTempC,
-      config.octopusRegion,
       config.metOfficeLatitude,
       config.metOfficeLongitude,
+      config.tariff.type,
+      octopusRegion,
+      manualDefaultPence,
+      manualOffPeakJson,
       householdId
     )
     .run();
@@ -411,28 +476,30 @@ export interface HouseholdForEnergy {
 }
 
 /** Every household ready for a heat pump optimization cycle: technical
- * config fully set AND (the bootstrap 'default' household, exempt from
- * billing the same way it's exempt from /chat's subscription gate — see
- * index.ts — OR actually paying: heating_addon_active AND
- * subscription_status genuinely 'active'/'trialing', not merely
- * 'incomplete'). That second condition matters — handlePortalStartSubscription
- * writes heating_addon_active optimistically the moment a homeowner
- * *chooses* the add-on, before Stripe has actually confirmed payment, so
- * checking subscription_status too is what stops the cron from touching a
- * real heat pump before the card's actually been charged. What the
- * scheduled() cron loops over. */
+ * config fully set (whichever tariff type it uses) AND (the bootstrap
+ * 'default' household, exempt from billing the same way it's exempt from
+ * /chat's subscription gate — see index.ts — OR actually paying:
+ * heating_addon_active AND subscription_status genuinely
+ * 'active'/'trialing', not merely 'incomplete'). That second condition
+ * matters — handlePortalStartSubscription writes heating_addon_active
+ * optimistically the moment a homeowner *chooses* the add-on, before
+ * Stripe has actually confirmed payment, so checking subscription_status
+ * too is what stops the cron from touching a real heat pump before the
+ * card's actually been charged. What the scheduled() cron loops over. */
 export async function listHouseholdsReadyForEnergyOptimization(env: Env): Promise<HouseholdForEnergy[]> {
   const { results } = await env.DB.prepare(
-    `SELECT id, heating_addon_active, heatpump_entity_id, room_temp_entity_id, heating_min_temp_c,
-            heating_max_temp_c, octopus_region, met_office_latitude, met_office_longitude
+    `SELECT id, heating_addon_active, ${ENERGY_ROW_COLUMNS}
      FROM households
      WHERE heatpump_entity_id IS NOT NULL
        AND room_temp_entity_id IS NOT NULL
        AND heating_min_temp_c IS NOT NULL
        AND heating_max_temp_c IS NOT NULL
-       AND octopus_region IS NOT NULL
        AND met_office_latitude IS NOT NULL
        AND met_office_longitude IS NOT NULL
+       AND (
+         (tariff_type = 'octopus_agile' AND octopus_region IS NOT NULL)
+         OR (tariff_type = 'manual' AND manual_tariff_default_pence IS NOT NULL)
+       )
        AND (
          id = 'default'
          OR (heating_addon_active = 1 AND subscription_status IN ('active', 'trialing'))
