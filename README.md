@@ -12,8 +12,9 @@ worth remembering — you just talk to it.
 GitHub
    │
    ├── Cloudflare Worker   (chat, memory, recall — cloudflare/)
-   ├── D1 schema           (conversations, messages, memories)
+   ├── D1 schema           (conversations, messages, memories, energy plans)
    ├── Vectorize           (semantic recall over past memories)
+   ├── Energy optimizer    (heat pump + solar + EV — optional, off by default)
    ├── Home Assistant integration (custom_components/rose/)
    ├── HA automations/examples
    └── Documentation       (docs/)
@@ -57,6 +58,16 @@ See [`docs/installation.md`](docs/installation.md) for the full walkthrough,
 or [`docs/home-assistant.md`](docs/home-assistant.md) if either badge
 doesn't work for your setup.
 
+**Optional: energy optimization.** ROSE can also optimize a Samsung (or any)
+heat pump against Octopus Agile's half-hourly prices and a Met Office
+forecast — Homely-style preheat-when-cheap scheduling, hard-clamped to a
+comfort band you set — and, once you have solar and an EV charger installed,
+layer in live SolarEdge surplus tracking so a heat pump preheat or EV charge
+uses free solar before ever paying for cheap-but-not-free grid power. Each piece is independently optional and off by default; `setup.sh` walks
+through whichever you have installed. All of it needs manual prerequisites
+(a publicly-reachable Home Assistant, API keys) that nothing can script for
+you — see [`docs/energy.md`](docs/energy.md) before enabling any of it.
+
 ## Secrets
 
 Nothing sensitive lives in this repository. `.env.example` documents the
@@ -77,6 +88,7 @@ That's what makes it safe for this repository to be public.
 - [`docs/cloudflare.md`](docs/cloudflare.md) — Worker, D1, and Vectorize details
 - [`docs/home-assistant.md`](docs/home-assistant.md) — the HA integration
 - [`docs/memory.md`](docs/memory.md) — how ROSE decides what to remember
+- [`docs/energy.md`](docs/energy.md) — heat pump, solar, and EV charging optimization
 - [`docs/wake-word.md`](docs/wake-word.md) — a ready-made "Rose" wake word ([`custom_components/rose/wake_word_model/rose.tflite`](custom_components/rose/wake_word_model/rose.tflite)), auto-installed on Supervised/HAOS setups, and how it was built
 
 ## License

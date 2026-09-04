@@ -208,6 +208,17 @@ it doesn't reflect whether this exchange itself got remembered (that
 decision happens after the reply, in the background). See
 [`memory.md`](memory.md) for the full flow.
 
+### `GET /energy/status`, `POST /energy/run`
+
+Optional — both require the household's own bearer token and return
+`{"enabled": false}` / a 409 unless energy optimization is configured and
+`ENERGY_OPTIMIZATION_ENABLED=true`. `GET /energy/status` returns the most
+recently computed heating plan; `POST /energy/run` forces an immediate
+recompute (and actually applies it to the heat pump). See
+[`energy.md`](energy.md) — this is the one part of ROSE that reaches back
+into your house rather than just answering questions, worth reading in
+full before using either of these.
+
 ### Home Assistant device control
 
 **Each household connects its own Home Assistant instance** — see

@@ -1,5 +1,7 @@
 import { handleChat } from "./chat";
 import { CHAT_UI_HTML } from "./chatUI";
+import { DASHBOARD_HTML } from "./dashboardUI";
+import { handleEnergyRun, handleEnergyStatus, runEnergyOptimization } from "./energy";
 import {
   createHousehold,
   householdBelongsToIntegrator,
@@ -53,6 +55,37 @@ export interface Env {
   // Plain vars, safe to keep in wrangler.jsonc.
   OPENAI_CHAT_MODEL: string;
   OPENAI_EMBEDDING_MODEL: string;
+
+  // Energy optimization — all optional, all off unless every one of the
+  // required fields below is set. See docs/energy.md. Stored as secrets for
+  // setup simplicity even where the value isn't actually sensitive.
+  ENERGY_OPTIMIZATION_ENABLED?: string; // "true" to enable; anything else (including unset) is off
+  OCTOPUS_REGION?: string; // single letter, A-P
+  OCTOPUS_PRODUCT_CODE?: string; // optional override; auto-detected if unset
+  MET_OFFICE_API_KEY?: string;
+  MET_OFFICE_LATITUDE?: string;
+  MET_OFFICE_LONGITUDE?: string;
+  ROSE_HEATPUMP_ENTITY_ID?: string; // e.g. climate.living_room_heat_pump
+  ROSE_ROOM_TEMP_ENTITY_ID?: string; // e.g. sensor.living_room_temperature
+  ROSE_HEATING_MIN_TEMP?: string; // °C, hard floor — never overridden for cost
+  ROSE_HEATING_MAX_TEMP?: string; // °C, hard ceiling — never overridden for cost
+
+  // Solar (SolarEdge) — independently optional; works with or without the
+  // heat pump fields above. A live surplus reading overrides the heat pump
+  // target to max (free heat) and, if configured, starts EV charging.
+  SOLAREDGE_API_KEY?: string;
+  SOLAREDGE_SITE_ID?: string;
+
+  // EV charging — independently optional; requires solar to be configured
+  // too (it decides purely off live solar surplus, no price fallback yet).
+  // Controlled via Home Assistant, not a direct SolarEdge call — see
+  // docs/energy.md for why. *_SERVICE values are "domain.service" strings,
+  // e.g. "switch.turn_on" — whatever your HA integration for the charger
+  // exposes.
+  ROSE_EV_CHARGER_ENTITY_ID?: string;
+  ROSE_EV_CHARGER_START_SERVICE?: string;
+  ROSE_EV_CHARGER_STOP_SERVICE?: string;
+  ROSE_EV_CHARGER_SURPLUS_THRESHOLD_KW?: string; // default 1.4 if unset
 }
 
 // Permissive CORS: this API is protected by its own bearer-token check
@@ -269,6 +302,17 @@ export default {
       });
     }
 
+    // Unauthenticated integrator dashboard page — same idea as the chat page
+    // above: just markup, served same-origin so it can call /integrator/*
+    // with a relative path and have the browser handle the session cookie.
+    // No auth at the route level; the page itself shows login/signup until
+    // /integrator/households proves there's a valid session.
+    if (url.pathname === "/dashboard" && request.method === "GET") {
+      return new Response(DASHBOARD_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
     // Unauthenticated health check, useful for the HA config flow's
     // "test connection" step and for uptime monitoring.
     if (url.pathname === "/health") {
@@ -344,6 +388,28 @@ export default {
       return withCors(await handleSetPin(request, env, household.id));
     }
 
+    // Energy optimization — see docs/energy.md. Gated only by the
+    // household's own bearer token, same as /chat; a no-op response unless
+    // ENERGY_OPTIMIZATION_ENABLED="true" and every required Env field is set.
+    if (url.pathname === "/energy/status" && request.method === "GET") {
+      return withCors(await handleEnergyStatus(env));
+    }
+
+    if (url.pathname === "/energy/run" && request.method === "POST") {
+      return withCors(await handleEnergyRun(env));
+    }
+
     return withCors(jsonError("not found", 404));
+  },
+
+  // Cloudflare Cron Trigger (see wrangler.jsonc `triggers.crons`) — recomputes
+  // the heating plan and applies the current slot's target temperature.
+  // No-op unless ENERGY_OPTIMIZATION_ENABLED="true" and every required field
+  // in Env is set — see docs/energy.md.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    if (env.ENERGY_OPTIMIZATION_ENABLED !== "true") return;
+    ctx.waitUntil(
+      runEnergyOptimization(env).catch((err) => console.error("scheduled energy optimization failed", err))
+    );
   },
 } satisfies ExportedHandler<Env>;

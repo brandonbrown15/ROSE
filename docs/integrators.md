@@ -7,8 +7,13 @@ setting up and supporting systems for their own clients), rather than every
 homeowner signing themselves up directly.
 
 This is the foundation the setup-streamlining and billing work builds on.
-As of this doc, it's an API only — see [What's not built yet](#whats-not-built-yet)
-for the dashboard page that actually uses it.
+Integrators use it through **`GET /dashboard`** — a browser page served
+directly by the Worker (`cloudflare/src/dashboardUI.ts`), the same
+no-install-required approach as the chat page (`GET /`). No `curl`, no
+terminal: sign up or log in, add a household, get its access key, connect
+its Home Assistant instance — all from a browser, including a phone's. The
+API below is what that page calls; use it directly only for scripting or
+troubleshooting.
 
 ## The model
 
@@ -119,9 +124,6 @@ a PIN or password, which only ever need to be checked, never read.
 
 ## What's not built yet
 
-- **No dashboard page.** Everything above is a JSON API; there's no `GET
-  /integrator` (or similar) page that actually calls it yet — a browser UI
-  is the natural next step once this foundation is confirmed working.
 - **No way to remove/transfer a household**, rename one, or regenerate its
   `api_key` if it leaks — only create and list exist so far.
 - **No billing.** Integrator accounts and household ownership are the
