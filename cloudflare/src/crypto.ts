@@ -103,3 +103,89 @@ export async function decryptSecret(packed: string, keyHex: string): Promise<str
     return null;
   }
 }
+
+// --- Signed session cookies (stateless) --------------------------------------
+//
+// Shared by every login system in ROSE that needs a browser session:
+// integrators.ts (dealer/installer dashboard) and customers.ts (homeowner
+// billing portal) so far. Both sign with the same SESSION_SECRET Worker
+// secret, so the cookie name alone isn't what keeps them apart — the
+// `domain` string below is mixed into the signed payload itself, so a
+// stolen integrator-session cookie value can't be replayed under the
+// customer-portal's cookie name (or vice versa) even if an attacker changes
+// which header it's sent as. Pass each caller's own cookie name as the
+// domain: distinct per login system, so this doubles as that separation.
+//
+// Stateless by design (no sessions table): a session cookie carries who and
+// until-when, HMAC-signed so it can't be forged or tampered with, and
+// verifying one is pure computation — no D1 read. The tradeoff, same for
+// every caller: a session can't be revoked early short of rotating
+// SESSION_SECRET, which logs *everyone* (both integrators and customers)
+// out at once. Fine until "log out this device" matters; a real sessions
+// table is the fix then.
+
+async function signPayload(payload: string, secretHex: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", hexToBytes(secretHex), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+  ]);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+  return bytesToHex(new Uint8Array(sig));
+}
+
+/** A `Set-Cookie` header value that logs a subject in under `cookieName`,
+ * signed against `domain` (see the module comment above — pass the same
+ * string used to verify it later, typically just `cookieName` itself). */
+export async function createSignedCookie(
+  secretHex: string,
+  cookieName: string,
+  domain: string,
+  subjectId: string,
+  durationMs: number
+): Promise<string> {
+  const expiresAt = Date.now() + durationMs;
+  const payload = `${domain}:${subjectId}.${expiresAt}`;
+  const sig = await signPayload(payload, secretHex);
+  return `${cookieName}=${subjectId}.${expiresAt}.${sig}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${
+    durationMs / 1000
+  }`;
+}
+
+/** A `Set-Cookie` header value that logs a subject out of `cookieName`. */
+export function clearSignedCookie(cookieName: string): string {
+  return `${cookieName}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+}
+
+/** Pull a named cookie's raw value out of a request's Cookie header, if
+ * present — pass the result to verifySignedCookie. */
+export function extractCookie(request: Request, cookieName: string): string | null {
+  const header = request.headers.get("cookie") ?? "";
+  const match = header.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`));
+  return match ? match[1] : null;
+}
+
+/** Verify a signed cookie value against the same `domain` it was created
+ * with, returning the subject id it authenticates or null if missing,
+ * malformed, expired, tampered with, or signed for a different domain. */
+export async function verifySignedCookie(
+  secretHex: string,
+  domain: string,
+  cookieValue: string | null
+): Promise<string | null> {
+  if (!cookieValue) {
+    return null;
+  }
+
+  const parts = cookieValue.split(".");
+  if (parts.length !== 3) {
+    return null;
+  }
+  const [subjectId, expiresAtStr, sig] = parts;
+
+  const expiresAt = Number(expiresAtStr);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    return null;
+  }
+
+  const expectedSig = await signPayload(`${domain}:${subjectId}.${expiresAtStr}`, secretHex);
+  return timingSafeEqual(sig, expectedSig) ? subjectId : null;
+}

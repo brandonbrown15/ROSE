@@ -50,6 +50,12 @@ npx wrangler secret put SESSION_SECRET
 # required before any integrator-managed household can configure its own
 # Home Assistant connection — encrypts each household's HA token at rest:
 npx wrangler secret put ENCRYPTION_KEY
+# optional — see docs/billing.md. Required for /portal/* billing routes to
+# do anything beyond report "not configured":
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_PUBLISHABLE_KEY
+npx wrangler secret put STRIPE_PRICE_ID
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
 
 `ROSE_API_KEY` is the shared secret the Home Assistant integration sends as
@@ -66,7 +72,9 @@ different values, not the same secret reused: one signs cookies (integrity
 every integrator out at once (see [`integrators.md`](integrators.md));
 rotating `ENCRYPTION_KEY` makes every already-stored Home Assistant token
 undecryptable, so treat that one as effectively permanent once households
-are actually using it.
+are actually using it. `SESSION_SECRET` also signs the customer billing
+portal's sessions (`docs/billing.md`) now, alongside the integrator
+dashboard's — rotating it logs both out at once.
 
 ## Local development
 
