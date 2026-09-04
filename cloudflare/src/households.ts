@@ -325,6 +325,15 @@ export type HouseholdTariff =
   | { type: "octopus_agile"; octopusRegion: string }
   | { type: "manual"; defaultPence: number; offPeakWindows: OffPeakWindow[] };
 
+/** Which direction the climate optimizer should push toward on a cheap
+ * slot — 'heat' (a heat pump: preheat toward max, safety floor when the
+ * room's too cold) or 'cool' (an AC unit: pre-cool toward min, safety
+ * ceiling when the room's too hot). Home Assistant represents both as the
+ * same `climate.*` entity/`climate.set_temperature` service — this is
+ * purely about which way energy.ts's optimizer reasons about them. See
+ * migration 0010's comment. */
+export type HvacMode = "heat" | "cool";
+
 export interface HouseholdEnergyConfig {
   heatpumpEntityId: string;
   roomTempEntityId: string;
@@ -332,6 +341,7 @@ export interface HouseholdEnergyConfig {
   maxTempC: number;
   metOfficeLatitude: string;
   metOfficeLongitude: string;
+  hvacMode: HvacMode;
   tariff: HouseholdTariff;
 }
 
@@ -342,6 +352,7 @@ interface HouseholdEnergyRow {
   heating_max_temp_c: number | null;
   met_office_latitude: string | null;
   met_office_longitude: string | null;
+  hvac_mode: string;
   tariff_type: string;
   octopus_region: string | null;
   manual_tariff_default_pence: number | null;
@@ -398,12 +409,13 @@ function rowToEnergyConfig(row: HouseholdEnergyRow): HouseholdEnergyConfig | nul
     maxTempC: row.heating_max_temp_c,
     metOfficeLatitude: row.met_office_latitude,
     metOfficeLongitude: row.met_office_longitude,
+    hvacMode: row.hvac_mode === "cool" ? "cool" : "heat",
     tariff,
   };
 }
 
 const ENERGY_ROW_COLUMNS = `heatpump_entity_id, room_temp_entity_id, heating_min_temp_c, heating_max_temp_c,
-            met_office_latitude, met_office_longitude, tariff_type, octopus_region,
+            met_office_latitude, met_office_longitude, hvac_mode, tariff_type, octopus_region,
             manual_tariff_default_pence, manual_tariff_off_peak_json`;
 
 /** A household's heating optimization config, or null if any required
@@ -434,7 +446,7 @@ export async function setHouseholdEnergyConfig(
     await env.DB.prepare(
       `UPDATE households SET heatpump_entity_id = NULL, room_temp_entity_id = NULL, heating_min_temp_c = NULL,
               heating_max_temp_c = NULL, met_office_latitude = NULL, met_office_longitude = NULL,
-              tariff_type = 'octopus_agile', octopus_region = NULL,
+              hvac_mode = 'heat', tariff_type = 'octopus_agile', octopus_region = NULL,
               manual_tariff_default_pence = NULL, manual_tariff_off_peak_json = NULL
        WHERE id = ?1`
     )
@@ -449,9 +461,9 @@ export async function setHouseholdEnergyConfig(
 
   await env.DB.prepare(
     `UPDATE households SET heatpump_entity_id = ?1, room_temp_entity_id = ?2, heating_min_temp_c = ?3,
-            heating_max_temp_c = ?4, met_office_latitude = ?5, met_office_longitude = ?6, tariff_type = ?7,
-            octopus_region = ?8, manual_tariff_default_pence = ?9, manual_tariff_off_peak_json = ?10
-     WHERE id = ?11`
+            heating_max_temp_c = ?4, met_office_latitude = ?5, met_office_longitude = ?6, hvac_mode = ?7,
+            tariff_type = ?8, octopus_region = ?9, manual_tariff_default_pence = ?10, manual_tariff_off_peak_json = ?11
+     WHERE id = ?12`
   )
     .bind(
       config.heatpumpEntityId,
@@ -460,6 +472,7 @@ export async function setHouseholdEnergyConfig(
       config.maxTempC,
       config.metOfficeLatitude,
       config.metOfficeLongitude,
+      config.hvacMode,
       config.tariff.type,
       octopusRegion,
       manualDefaultPence,

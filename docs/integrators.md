@@ -136,15 +136,20 @@ Session-authed, same ownership check as the HA endpoint above.
   "max_temp_c": 21,
   "latitude": "51.5",
   "longitude": "-0.12",
+  "hvac_mode": "heat",
   "tariff_type": "octopus_agile",
   "octopus_region": "C"
 }
 ```
 
-`tariff_type` is `"octopus_agile"` (needs `octopus_region`) or `"manual"`
-(needs `manual_default_pence` and, optionally, `manual_off_peak_windows`)
-— see [`energy.md`](energy.md#enabling-it) for the full shape and why
-there are two.
+`hvac_mode` is `"heat"` (default if omitted) or `"cool"` — same
+`climate.*` entity mechanism either way, just flips which direction the
+optimizer pushes toward (heat pump vs. air conditioning — see
+[`energy.md`](energy.md)). `tariff_type` is `"octopus_agile"` (needs
+`octopus_region`) or `"manual"` (needs `manual_default_pence` and,
+optionally, `manual_off_peak_windows`) — see
+[`energy.md`](energy.md#enabling-it) for the full shape and why there are
+two.
 
 Technical setup for [heating optimization](energy.md) — this is the
 *installer's* side of it (which entities, which tariff, which

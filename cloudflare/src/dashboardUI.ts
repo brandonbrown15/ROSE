@@ -405,7 +405,12 @@ export const DASHBOARD_HTML = `<!doctype html>
       energyForm.className = 'ha-form hidden-form';
       energyForm.innerHTML =
         '<p class="sub" style="margin:0 0 4px;">Needs a Home Assistant connection above already set. This wires up the plumbing — the homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
-        '<label>Heat pump climate entity ID</label>' +
+        '<label>Mode</label>' +
+        '<select class="energy-hvac-mode">' +
+        '<option value="heat">Heating (heat pump)</option>' +
+        '<option value="cool">Cooling (air conditioning)</option>' +
+        '</select>' +
+        '<label>Climate entity ID</label>' +
         '<input type="text" class="energy-heatpump" placeholder="climate.living_room_heat_pump" required>' +
         '<label>Room temperature sensor entity ID</label>' +
         '<input type="text" class="energy-roomtemp" placeholder="sensor.living_room_temperature" required>' +
@@ -480,6 +485,7 @@ export const DASHBOARD_HTML = `<!doctype html>
           max_temp_c: Number(energyForm.querySelector('.energy-maxtemp').value),
           latitude: energyForm.querySelector('.energy-lat').value.trim(),
           longitude: energyForm.querySelector('.energy-lon').value.trim(),
+          hvac_mode: energyForm.querySelector('.energy-hvac-mode').value,
           tariff_type: tariffTypeSelect.value
         };
 
