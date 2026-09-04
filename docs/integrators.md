@@ -126,9 +126,10 @@ a PIN or password, which only ever need to be checked, never read.
 
 - **No way to remove/transfer a household**, rename one, or regenerate its
   `api_key` if it leaks — only create and list exist so far.
-- **No billing.** Integrator accounts and household ownership are the
-  foundation billing will attach to (a subscription per household, most
-  likely) — not built yet.
+- **No integrator-side visibility into a household's billing status.**
+  Billing is homeowner-direct, not integrator-managed — see
+  [`billing.md`](billing.md) — so an integrator's dashboard has no view
+  into whether their client's subscription is current.
 - **No email verification or password reset.** Signup takes any
   syntactically-valid email at face value; a lost password has no recovery
   path today beyond a manual D1 update.

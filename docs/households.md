@@ -91,15 +91,17 @@ theirs alone.
 
 - **No self-serve signup for homeowners.** An integrator can create a
   household through the dashboard API now (see above), but there's still no
-  page where a homeowner signs themselves up directly.
-- **No billing.** Nothing meters usage or charges anyone yet — the
-  integrator layer is the foundation this will build on, not billing
-  itself.
-- **No self-serve billing UI on the dashboard yet** — see
-  [`integrators.md`](integrators.md) for what the `GET /dashboard` page
-  covers today (signup/login, household creation, Home Assistant
-  connection) versus what's still ahead (rename/delete/rotate a household,
-  billing).
+  page where a homeowner signs *the household itself* up directly — only
+  billing (below) is self-serve, on top of a household an integrator
+  already created.
+- **Billing exists, but is homeowner-direct, not through the
+  integrator** — see [`billing.md`](billing.md). A homeowner claims their
+  own household at `GET /portal` using its existing `api_key` and manages
+  their own Stripe subscription; the integrator that set the household up
+  technically has no role in that billing relationship.
+- **No dashboard rename/delete/api_key-rotation** for a household yet — see
+  [`integrators.md`](integrators.md) for what `GET /dashboard` covers today
+  versus what's still ahead.
 - **Vectorize isn't scoped by household at the database level.** Semantic
   recall (`recall.ts`) over-fetches a wide candidate pool from Vectorize
   (`max(topK * 10, 50)` results) and filters down to the requesting

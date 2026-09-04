@@ -4,6 +4,11 @@ import { bytesToHex, decryptSecret, encryptSecret, hashSecret, timingSafeEqual, 
 export interface Household {
   id: string;
   name: string;
+  // NULL: no subscription ever created for this household — never blocks
+  // anything (see migration 0007's comment). Only 'past_due'/'canceled'
+  // make index.ts refuse /chat. Always null on the ROSE_API_KEY fast path
+  // below since that path never touches D1 — see its own comment.
+  subscription_status?: string | null;
 }
 
 /**
@@ -13,17 +18,23 @@ export interface Household {
  *  - The token equals `env.ROSE_API_KEY` — the legacy single-tenant secret.
  *    Resolves to the bootstrap 'default' household (see migration 0003)
  *    without touching D1, so a deployment that predates multi-tenancy
- *    keeps working with its existing key unchanged.
+ *    keeps working with its existing key unchanged. This also means
+ *    subscription_status is always null here — if the 'default' household
+ *    is ever billing-claimed too, a lapsed subscription won't be enforced
+ *    against requests that authenticate via this legacy key specifically
+ *    (only via its own households-table api_key, if it has one). Edge
+ *    case, not a gap worth closing: 'default' is the bootstrap/operator
+ *    household, not a paying customer's.
  *  - Otherwise, look it up in the `households` table — this is how every
  *    household added after multi-tenancy authenticates (see
  *    docs/households.md for how to add one).
  */
 export async function resolveHousehold(env: Env, token: string): Promise<Household | null> {
   if (env.ROSE_API_KEY && token === env.ROSE_API_KEY) {
-    return { id: "default", name: "Default household" };
+    return { id: "default", name: "Default household", subscription_status: null };
   }
 
-  const row = await env.DB.prepare(`SELECT id, name FROM households WHERE api_key = ?1`)
+  const row = await env.DB.prepare(`SELECT id, name, subscription_status FROM households WHERE api_key = ?1`)
     .bind(token)
     .first<Household>();
   return row ?? null;
@@ -183,4 +194,78 @@ export async function createHousehold(
     .run();
 
   return { id, name, api_key: apiKey };
+}
+
+// --- Billing (Stripe) ---------------------------------------------------
+//
+// See customers.ts for the homeowner-facing account/claim flow this
+// belongs to, stripe.ts for the actual Stripe API calls, and
+// docs/billing.md for the full picture. These are just the D1 reads/writes
+// index.ts's /portal/billing/* and /billing/webhook handlers need.
+
+export interface HouseholdBilling {
+  customerEmail: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  subscriptionStatus: string | null;
+}
+
+export async function getHouseholdBilling(env: Env, householdId: string): Promise<HouseholdBilling | null> {
+  const row = await env.DB.prepare(
+    `SELECT customer_email, stripe_customer_id, stripe_subscription_id, subscription_status FROM households WHERE id = ?1`
+  )
+    .bind(householdId)
+    .first<{
+      customer_email: string | null;
+      stripe_customer_id: string | null;
+      stripe_subscription_id: string | null;
+      subscription_status: string | null;
+    }>();
+  if (!row) return null;
+  return {
+    customerEmail: row.customer_email,
+    stripeCustomerId: row.stripe_customer_id,
+    stripeSubscriptionId: row.stripe_subscription_id,
+    subscriptionStatus: row.subscription_status,
+  };
+}
+
+export async function setHouseholdStripeCustomer(env: Env, householdId: string, stripeCustomerId: string): Promise<void> {
+  await env.DB.prepare(`UPDATE households SET stripe_customer_id = ?1 WHERE id = ?2`)
+    .bind(stripeCustomerId, householdId)
+    .run();
+}
+
+export async function setHouseholdSubscription(
+  env: Env,
+  householdId: string,
+  stripeSubscriptionId: string,
+  status: string
+): Promise<void> {
+  await env.DB.prepare(`UPDATE households SET stripe_subscription_id = ?1, subscription_status = ?2 WHERE id = ?3`)
+    .bind(stripeSubscriptionId, status, householdId)
+    .run();
+}
+
+/** Look up a household by its Stripe customer id — how the webhook handler
+ * (index.ts's POST /billing/webhook) maps a Stripe event back to a
+ * household, since Stripe's payloads carry Stripe's own ids, not ours. */
+export async function findHouseholdByStripeCustomerId(env: Env, stripeCustomerId: string): Promise<Household | null> {
+  const row = await env.DB.prepare(`SELECT id, name FROM households WHERE stripe_customer_id = ?1`)
+    .bind(stripeCustomerId)
+    .first<Household>();
+  return row ?? null;
+}
+
+/** Update subscription_status by Stripe subscription id rather than
+ * household id — some webhook event types carry the subscription id more
+ * directly than the customer id in the payload shape index.ts reads. */
+export async function updateSubscriptionStatusBySubscriptionId(
+  env: Env,
+  stripeSubscriptionId: string,
+  status: string
+): Promise<void> {
+  await env.DB.prepare(`UPDATE households SET subscription_status = ?1 WHERE stripe_subscription_id = ?2`)
+    .bind(status, stripeSubscriptionId)
+    .run();
 }

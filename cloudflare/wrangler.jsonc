@@ -29,9 +29,10 @@
   ],
 
   // Non-secret configuration. Secrets (OPENAI_API_KEY, ROSE_API_KEY, HA_TOKEN,
-  // SESSION_SECRET, ENCRYPTION_KEY — see docs/cloudflare.md — and the
-  // energy-optimization config in docs/energy.md) are set with
-  // `wrangler secret put <NAME>` and must never be listed here.
+  // SESSION_SECRET, ENCRYPTION_KEY, the STRIPE_* billing config in
+  // docs/billing.md — see docs/cloudflare.md — and the energy-optimization
+  // config in docs/energy.md) are set with `wrangler secret put <NAME>`
+  // and must never be listed here.
   "vars": {
     "OPENAI_CHAT_MODEL": "gpt-4o-mini",
     "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small"
