@@ -19,13 +19,44 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         run: npm install
 
       - name: Typecheck
         run: npm run typecheck
+
+      # wrangler.jsonc is committed with a placeholder database_id (never a
+      # real one — this repo may end up templating multiple deployments, so
+      # it should never carry any one of them as checked-in state). Patch in
+      # the real id here, the same sed-on-the-placeholder approach
+      # scripts/setup.sh already uses for local dev, sourced from a
+      # repository *variable* rather than a secret — a D1 database id isn't
+      # sensitive (it's a pointer, not a credential), so it doesn't need
+      # encryption, just somewhere outside git history to live.
+      - name: Set D1 database_id
+        run: |
+          if [ -z "${DB_ID:-}" ]; then
+            echo "::error::CLOUDFLARE_D1_DATABASE_ID repository variable is not set (Settings > Secrets and variables > Actions > Variables). See docs/cloudflare.md."
+            exit 1
+          fi
+          sed -i "s|REPLACE_WITH_YOUR_D1_DATABASE_ID|$DB_ID|" wrangler.jsonc
+        env:
+          DB_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+
+      # Applies any migrations not yet recorded as run against the live
+      # database (wrangler tracks that itself — a migration already applied
+      # is a safe no-op here, so this runs unconditionally on every deploy
+      # rather than only when a migration file changed). Runs before Deploy
+      # so new code never reaches a schema it expects but doesn't have yet.
+      - name: Run D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: cloudflare
+          command: d1 migrations apply rose-db --remote
 
       - name: Deploy
         uses: cloudflare/wrangler-action@v3

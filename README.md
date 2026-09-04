@@ -89,6 +89,7 @@ That's what makes it safe for this repository to be public.
 - [`docs/home-assistant.md`](docs/home-assistant.md) — the HA integration
 - [`docs/memory.md`](docs/memory.md) — how ROSE decides what to remember
 - [`docs/energy.md`](docs/energy.md) — heat pump, solar, and EV charging optimization
+- [`docs/wake-word.md`](docs/wake-word.md) — a ready-made "Rose" wake word ([`custom_components/rose/wake_word_model/rose.tflite`](custom_components/rose/wake_word_model/rose.tflite)), auto-installed on Supervised/HAOS setups, and how it was built
 
 ## License
 
