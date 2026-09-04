@@ -1,5 +1,6 @@
 import { handleChat } from "./chat";
 import { CHAT_UI_HTML } from "./chatUI";
+import { DASHBOARD_HTML } from "./dashboardUI";
 import { handleEnergyRun, handleEnergyStatus, runEnergyOptimization } from "./energy";
 import {
   createHousehold,
@@ -297,6 +298,17 @@ export default {
     // any browser (e.g. a phone) by opening this Worker's own URL.
     if (url.pathname === "/" && request.method === "GET") {
       return new Response(CHAT_UI_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+
+    // Unauthenticated integrator dashboard page — same idea as the chat page
+    // above: just markup, served same-origin so it can call /integrator/*
+    // with a relative path and have the browser handle the session cookie.
+    // No auth at the route level; the page itself shows login/signup until
+    // /integrator/households proves there's a valid session.
+    if (url.pathname === "/dashboard" && request.method === "GET") {
+      return new Response(DASHBOARD_HTML, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
     }

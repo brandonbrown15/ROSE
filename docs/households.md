@@ -65,9 +65,10 @@ See `resolveHousehold()` in
 Two ways now:
 
 1. **Through an integrator account** (the normal path going forward) — see
-   [`integrators.md`](integrators.md). An integrator (installer/dealer) logs
-   into the dashboard API, creates a household under their account, and gets
-   back its `api_key` — no D1 access needed, no talking to you.
+   [`integrators.md`](integrators.md). An integrator (installer/dealer) signs
+   up or logs into the dashboard at `GET /dashboard` — a browser page, no
+   terminal needed — creates a household under their account, and gets back
+   its `api_key` — no D1 access needed, no talking to you.
 2. **By hand**, still useful for the bootstrap household or one-off cases
    outside the integrator model:
 
@@ -94,10 +95,11 @@ theirs alone.
 - **No billing.** Nothing meters usage or charges anyone yet — the
   integrator layer is the foundation this will build on, not billing
   itself.
-- **No dashboard UI**, only the API underneath it — see
-  [`integrators.md`](integrators.md) for what exists today
-  (signup/login/household management as JSON endpoints) versus what's next
-  (an actual page to use them from).
+- **No self-serve billing UI on the dashboard yet** — see
+  [`integrators.md`](integrators.md) for what the `GET /dashboard` page
+  covers today (signup/login, household creation, Home Assistant
+  connection) versus what's still ahead (rename/delete/rotate a household,
+  billing).
 - **Vectorize isn't scoped by household at the database level.** Semantic
   recall (`recall.ts`) over-fetches a wide candidate pool from Vectorize
   (`max(topK * 10, 50)` results) and filters down to the requesting
