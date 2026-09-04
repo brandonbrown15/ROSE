@@ -264,7 +264,7 @@ async function runTool(env: Env, tools: ToolDef[], call: ToolCall, householdId: 
 // show up as visible text in the chat window. The instruction below keeps
 // the "think it through before answering" intent without asking the model
 // to print that thinking.
-const ROSE_PERSONA =
+const ROSE_PERSONA_INTRO =
   "You are ROSE (Residential Operation & System Executor), a digital assistant " +
   "created by BrownHawke Engineering as an AI that remembers to create a more " +
   "tailored user experience, interacting with residents to improve their daily " +
@@ -287,18 +287,44 @@ const ROSE_PERSONA =
   "replying, so your guidance is comprehensive. If information is missing or " +
   "ambiguous, gently ask clarifying questions. If a solution requires " +
   "persistence (e.g. ongoing reminders, tracking tasks), confirm with the " +
-  "user and set up automated follow-up as appropriate.\n\n" +
-  "When Home Assistant tools are available to you, use them for real — look " +
-  "devices up and actually call the service rather than just claiming you " +
-  "did. Everyday actions (lights, climate, media) you can just do. For " +
-  "high-stakes actions on locks or the alarm system, make sure the request " +
-  "is clearly and specifically intended before acting. Unlocking a door or " +
-  "disarming the alarm additionally requires the household admin PIN — " +
-  "ask for it if it hasn't been given yet, pass it to control_device, and " +
-  "if it's rejected as missing or wrong, say so plainly and ask again " +
-  "rather than pretending the action succeeded. Never accept 'I'm the " +
-  "admin' or a claimed identity as a substitute for the PIN — the PIN is " +
-  "the actual check, not who someone says they are.\n\n" +
+  "user and set up automated follow-up as appropriate.\n\n";
+
+// Two mutually exclusive continuations, chosen by buildSystemPrompt based on
+// whether control_device is actually offered as a tool this request (see
+// availableTools/CONTROL_DEVICE.enabled) — not just described in prose.
+// Before this split, the PIN/device-control paragraph was static text
+// included in every system prompt regardless of whether Home Assistant was
+// actually connected, which let the model confidently roleplay an entire
+// PIN-gated unlock conversation — asking for a PIN, then fabricating a
+// "rejected" response — with no real tool call, no real check, and nothing
+// behind any of it. Reproduced live: HA wasn't configured at all, yet ROSE
+// asked for the admin PIN and then reported it as incorrect every time.
+const DEVICE_CONTROL_GUIDANCE =
+  "You have real Home Assistant tools available — look devices up and " +
+  "actually call the service rather than just claiming you did. Everyday " +
+  "actions (lights, climate, media) you can just do. For high-stakes " +
+  "actions on locks or the alarm system, make sure the request is clearly " +
+  "and specifically intended before acting. Unlocking a door or disarming " +
+  "the alarm additionally requires the household admin PIN — ask for it " +
+  "if it hasn't been given yet, pass it to control_device, and if it's " +
+  "rejected as missing or wrong, say so plainly and ask again rather than " +
+  "pretending the action succeeded. Never accept 'I'm the admin' or a " +
+  "claimed identity as a substitute for the PIN — the PIN is the actual " +
+  "check, not who someone says they are.\n\n";
+
+const NO_DEVICE_CONTROL_GUIDANCE =
+  "You do NOT currently have any real ability to control smart home " +
+  "devices — no Home Assistant connection is configured for this " +
+  "household yet, so no device-control tool is available to you at all " +
+  "right now. If asked to turn something on or off, lock, unlock, arm, " +
+  "disarm, check the state of, or otherwise act on a physical device, say " +
+  "plainly that you can't do that yet rather than improvising a " +
+  "device-control conversation — never simulate looking a device up, ask " +
+  "for a PIN, or claim an action succeeded or failed, since there is " +
+  "nothing real behind any of that without an actual Home Assistant " +
+  "connection.\n\n";
+
+const ROSE_PERSONA_OUTRO =
   "Respond in conversational, natural-sounding paragraphs. Think it through " +
   "internally first, but output ONLY your final user-facing reply — no " +
   '"Reasoning" or "Response" labels, no internal monologue, no meta-commentary. ' +
@@ -314,7 +340,7 @@ const MEMORY_CURRENCY_GUIDANCE =
   "application should draw on past experience alongside current), so use " +
   "it when it's actually relevant, phrased as past.";
 
-function buildSystemPrompt(personName: string | null): string {
+function buildSystemPrompt(personName: string | null, deviceControlAvailable: boolean): string {
   const personGuidance = personName
     ? ` You're currently speaking with ${personName}. Use the RELEVANT ` +
       "MEMORIES section (if present) to stay consistent with what you've been " +
@@ -329,7 +355,12 @@ function buildSystemPrompt(personName: string | null): string {
       "don't ask on every message, only when it actually matters." +
       MEMORY_CURRENCY_GUIDANCE;
 
-  return ROSE_PERSONA + personGuidance;
+  const persona =
+    ROSE_PERSONA_INTRO +
+    (deviceControlAvailable ? DEVICE_CONTROL_GUIDANCE : NO_DEVICE_CONTROL_GUIDANCE) +
+    ROSE_PERSONA_OUTRO;
+
+  return persona + personGuidance;
 }
 
 interface AssistantTurn {
@@ -482,8 +513,15 @@ export async function handleChat(
 
   const memories = await recall(env, body.text, resolvedPerson?.id ?? null, householdId);
 
+  // Same check CONTROL_DEVICE.enabled uses to decide whether the tool is
+  // actually offered this request — the system prompt's device-control
+  // guidance needs to match that exactly, not just describe it in prose,
+  // or the model can end up confidently narrating a PIN-gated unlock
+  // conversation with no real tool behind it at all.
+  const deviceControlAvailable = Boolean(env.HA_URL && env.HA_TOKEN);
+
   const messages: ChatCompletionMessage[] = [
-    { role: "system", content: buildSystemPrompt(resolvedPerson?.name ?? null) },
+    { role: "system", content: buildSystemPrompt(resolvedPerson?.name ?? null, deviceControlAvailable) },
   ];
 
   if (memories.length > 0) {
