@@ -1,13 +1,21 @@
 # Energy optimization (heat pump/AC, solar, EV charging)
 
+**The heat pump/AC piece of this is the billed product — Boreas Heating
+and Cooling Optimisation** (see [`billing.md`](billing.md#pricing)).
+Essentially: the customer sets a comfort temperature, and Boreas keeps the
+home there as cheaply as possible — heating or cooling, whichever's
+actually installed — rather than a fixed schedule. Solar surplus tracking
+and EV charging, described further down this page, are separate,
+unbranded, global (not per-household billed) features layered on
+alongside it, not part of Boreas itself.
+
 **Off by default, and each piece is independently optional.** A subsystem
 that uses live electricity prices and a Met Office weather forecast to
 decide when to preheat/pre-cool and when to coast a Samsung (or any) heat
 pump or air conditioner — the same idea as Homely, and priced to compete
-with it directly (see [`billing.md`](billing.md#pricing)) — plus two
-SolarEdge add-ons you can layer in once that hardware exists: live solar
-surplus overriding the schedule ("free power beats cheap power"), and
-solar-surplus-first EV charging.
+with it directly — plus two SolarEdge add-ons you can layer in once that
+hardware exists: live solar surplus overriding the schedule ("free power
+beats cheap power"), and solar-surplus-first EV charging.
 
 **Heating or cooling, per household** — Home Assistant represents a heat
 pump and an AC unit the same way (a `climate.*` entity,
@@ -488,7 +496,7 @@ This runs this household's heat pump cycle immediately — including
 actually setting the heat pump — and returns the full plan plus which slot
 was applied and why. `409` if this household has no heat pump config set
 yet; `402` if it does but isn't the `default` household and doesn't have
-an active heating add-on subscription (see [`billing.md`](billing.md)).
+an active Boreas add-on subscription (see [`billing.md`](billing.md)).
 
 ```json
 {
