@@ -9,6 +9,9 @@ export const CHAT_UI_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chat with ROSE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -19,11 +22,19 @@ export const CHAT_UI_HTML = `<!doctype html>
     --border: #e2ddd6;
     --accent: #a8324a;
     --accent-text: #ffffff;
+    --accent-soft: rgba(168, 50, 74, 0.08);
     --bubble-user: #a8324a;
     --bubble-user-text: #ffffff;
     --bubble-rose: #efeae4;
     --bubble-rose-text: #1a1a1a;
     --error: #b3261e;
+    --success: #2e7d32;
+    --radius-sm: 8px;
+    --radius-lg: 18px;
+    --shadow-sm: 0 1px 2px rgba(20, 16, 12, 0.05);
+    --shadow-md: 0 2px 4px rgba(20, 16, 12, 0.04), 0 12px 28px -12px rgba(20, 16, 12, 0.18);
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -34,6 +45,9 @@ export const CHAT_UI_HTML = `<!doctype html>
       --border: #3a352c;
       --bubble-rose: #2c2820;
       --bubble-rose-text: #f2ede6;
+      --accent-soft: rgba(224, 122, 145, 0.12);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 32px -16px rgba(0, 0, 0, 0.55);
     }
   }
   * { box-sizing: border-box; }
@@ -41,11 +55,26 @@ export const CHAT_UI_HTML = `<!doctype html>
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
     height: 100vh;
     display: flex;
     flex-direction: column;
   }
+  h1, h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; }
+
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+    background: linear-gradient(155deg, var(--accent), #c8677c);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-display); font-weight: 700; font-size: 15px;
+    box-shadow: var(--shadow-sm);
+  }
+  .brand .wordmark { font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: -0.01em; line-height: 1.2; }
+  .brand .tagline { font-size: 11px; color: var(--muted); margin-top: 1px; display: flex; align-items: center; gap: 5px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block; flex-shrink: 0; }
+
   header {
     padding: 14px 20px;
     border-bottom: 1px solid var(--border);
@@ -54,24 +83,15 @@ export const CHAT_UI_HTML = `<!doctype html>
     justify-content: space-between;
     background: var(--panel);
   }
-  header h1 {
-    font-size: 17px;
-    margin: 0;
-    font-weight: 600;
-  }
-  header .sub {
-    font-size: 12px;
-    color: var(--muted);
-    margin-top: 2px;
-  }
   button.icon {
     background: none;
     border: 1px solid var(--border);
     color: var(--muted);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     padding: 6px 10px;
     cursor: pointer;
     font-size: 13px;
+    transition: color .15s ease, border-color .15s ease;
   }
   button.icon:hover { color: var(--text); border-color: var(--accent); }
 
@@ -83,11 +103,11 @@ export const CHAT_UI_HTML = `<!doctype html>
     flex-direction: column;
     gap: 10px;
   }
-  .msg { max-width: 75%; padding: 10px 14px; border-radius: 16px; line-height: 1.4; font-size: 14px; white-space: pre-wrap; }
+  .msg { max-width: 75%; padding: 10px 14px; border-radius: 16px; line-height: 1.45; font-size: 14px; white-space: pre-wrap; box-shadow: var(--shadow-sm); }
   .msg.user { align-self: flex-end; background: var(--bubble-user); color: var(--bubble-user-text); border-bottom-right-radius: 4px; }
   .msg.rose { align-self: flex-start; background: var(--bubble-rose); color: var(--bubble-rose-text); border-bottom-left-radius: 4px; }
-  .msg.error { align-self: center; background: transparent; color: var(--error); font-size: 13px; text-align: center; max-width: 90%; }
-  .msg.meta { align-self: center; color: var(--muted); font-size: 12px; }
+  .msg.error { align-self: center; background: transparent; box-shadow: none; color: var(--error); font-size: 13px; text-align: center; max-width: 90%; }
+  .msg.meta { align-self: center; background: transparent; box-shadow: none; color: var(--muted); font-size: 12px; }
 
   form#composer {
     display: flex;
@@ -104,11 +124,13 @@ export const CHAT_UI_HTML = `<!doctype html>
     background: var(--bg);
     color: var(--text);
     font-size: 14px;
+    font-family: var(--font-body);
     outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
-  #text:focus { border-color: var(--accent); }
+  #text:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   #send {
-    padding: 10px 20px;
+    padding: 10px 22px;
     border-radius: 20px;
     border: none;
     background: var(--accent);
@@ -116,48 +138,66 @@ export const CHAT_UI_HTML = `<!doctype html>
     font-weight: 600;
     cursor: pointer;
     font-size: 14px;
+    transition: filter .15s ease, transform .05s ease;
   }
+  #send:hover:not(:disabled) { filter: brightness(1.08); }
+  #send:active:not(:disabled) { transform: translateY(1px); }
   #send:disabled { opacity: 0.5; cursor: default; }
 
   #setup {
     max-width: 420px;
     margin: 10vh auto;
-    padding: 28px;
+    padding: 32px;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
   }
-  #setup h2 { margin-top: 0; font-size: 18px; }
-  #setup p { color: var(--muted); font-size: 13px; line-height: 1.5; }
-  #setup label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+  #setup .brand { margin-bottom: 20px; }
+  #setup h2 { margin: 0 0 4px; font-size: 19px; }
+  #setup p { color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+  #setup label { display: block; font-size: 12.5px; font-weight: 600; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
   #setup input {
     width: 100%;
-    padding: 9px 12px;
-    border-radius: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
     font-size: 14px;
+    font-family: var(--font-body);
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
+  #setup input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   #setup button {
     margin-top: 18px;
     width: 100%;
-    padding: 10px;
-    border-radius: 8px;
+    padding: 11px;
+    border-radius: var(--radius-sm);
     border: none;
     background: var(--accent);
     color: var(--accent-text);
     font-weight: 600;
     cursor: pointer;
     font-size: 14px;
+    box-shadow: var(--shadow-sm);
+    transition: filter .15s ease, transform .05s ease;
   }
+  #setup button:hover { filter: brightness(1.08); }
+  #setup button:active { transform: translateY(1px); }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 
 <div id="setup">
-  <h2>Connect to ROSE</h2>
+  <div class="brand">
+    <div class="mark">R</div>
+    <div>
+      <div class="wordmark">ROSE</div>
+      <div class="tagline">Connect to your household</div>
+    </div>
+  </div>
   <p>Your API key is saved only in this browser (localStorage) — never sent anywhere except to this same page's own <code>/chat</code> endpoint.</p>
   <label for="key">API Key</label>
   <input id="key" type="password" placeholder="your ROSE_API_KEY" autocomplete="off">
@@ -177,9 +217,12 @@ export const CHAT_UI_HTML = `<!doctype html>
 
 <div id="chat" hidden style="display:flex; flex-direction:column; height:100%;">
   <header>
-    <div>
-      <h1>ROSE</h1>
-      <div class="sub">connected</div>
+    <div class="brand">
+      <div class="mark">R</div>
+      <div>
+        <div class="wordmark">ROSE</div>
+        <div class="tagline"><span class="status-dot"></span>Connected</div>
+      </div>
     </div>
     <div style="display:flex; gap:8px;">
       <button class="icon" id="newConvo">New conversation</button>

@@ -17,6 +17,9 @@ export const BILLING_UI_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ROSE Billing</title>
 <script src="https://js.stripe.com/v3/"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -27,8 +30,18 @@ export const BILLING_UI_HTML = `<!doctype html>
     --border: #e2ddd6;
     --accent: #a8324a;
     --accent-text: #ffffff;
+    --accent-soft: rgba(168, 50, 74, 0.08);
     --error: #b3261e;
     --success: #2e7d32;
+    --success-soft: #d5f0d8;
+    --error-soft: #f6d6d3;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+    --shadow-sm: 0 1px 2px rgba(20, 16, 12, 0.05);
+    --shadow-md: 0 2px 4px rgba(20, 16, 12, 0.04), 0 12px 28px -12px rgba(20, 16, 12, 0.18);
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -37,6 +50,11 @@ export const BILLING_UI_HTML = `<!doctype html>
       --text: #f2ede6;
       --muted: #a89f92;
       --border: #3a352c;
+      --accent-soft: rgba(224, 122, 145, 0.12);
+      --success-soft: rgba(46, 125, 50, 0.18);
+      --error-soft: rgba(179, 38, 30, 0.18);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 32px -16px rgba(0, 0, 0, 0.55);
     }
   }
   * { box-sizing: border-box; }
@@ -44,57 +62,80 @@ export const BILLING_UI_HTML = `<!doctype html>
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
     min-height: 100vh;
   }
-  h1, h2 { font-weight: 600; }
+  h1, h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; }
   p { line-height: 1.5; }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+  label { display: block; font-size: 12.5px; font-weight: 600; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
   input {
     width: 100%;
-    padding: 9px 12px;
-    border-radius: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
     font-size: 14px;
+    font-family: var(--font-body);
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
-  input:focus { outline: none; border-color: var(--accent); }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   button {
     padding: 10px 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     border: none;
     background: var(--accent);
     color: var(--accent-text);
     font-weight: 600;
     cursor: pointer;
     font-size: 14px;
+    box-shadow: var(--shadow-sm);
+    transition: filter .15s ease, transform .05s ease;
   }
-  button:disabled { opacity: 0.5; cursor: default; }
-  button.secondary { background: none; border: 1px solid var(--border); color: var(--text); }
-  button.link { background: none; border: none; color: var(--accent); font-weight: 600; padding: 0; cursor: pointer; font-size: 13px; }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: 0.5; cursor: default; filter: none; transform: none; }
+  button.secondary { background: none; border: 1px solid var(--border); color: var(--text); box-shadow: none; }
+  button.secondary:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); filter: none; }
+  button.link { background: none; border: none; color: var(--accent); font-weight: 600; padding: 0; cursor: pointer; font-size: 13px; box-shadow: none; }
+  button.link:hover { text-decoration: underline; filter: none; }
   .status { font-size: 13px; margin-top: 10px; min-height: 1.2em; }
   .status.error { color: var(--error); }
   .status.ok { color: var(--success); }
   .status.muted { color: var(--muted); }
   [hidden] { display: none !important; }
 
-  #card { max-width: 420px; margin: 10vh auto; padding: 32px; background: var(--panel); border: 1px solid var(--border); border-radius: 16px; }
-  #card h1 { font-size: 20px; margin: 0 0 4px; }
-  #card .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0;
+    background: linear-gradient(155deg, var(--accent), #c8677c);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-display); font-weight: 700; font-size: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .brand .wordmark { font-family: var(--font-display); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; line-height: 1.2; }
+  .brand .tagline { font-size: 11.5px; color: var(--muted); margin-top: 1px; text-transform: uppercase; letter-spacing: .04em; }
+
+  #card { max-width: 420px; margin: 8vh auto; padding: 36px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); }
+  #card .brand { margin-bottom: 18px; }
+  #card .sub { color: var(--muted); font-size: 13.5px; margin: 0 0 22px; line-height: 1.55; }
   #card form button[type="submit"] { width: 100%; margin-top: 18px; }
   .switch { text-align: center; margin-top: 18px; font-size: 13px; color: var(--muted); }
 
-  header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--panel); }
-  header h1 { font-size: 17px; margin: 0; }
-  header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  main { max-width: 480px; margin: 0 auto; padding: 24px 20px 60px; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-  .badge.active { background: #d5f0d8; color: var(--success); }
-  .badge.lapsed { background: #f6d6d3; color: var(--error); }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; background: var(--panel); }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .header-right .sub { font-size: 12.5px; color: var(--muted); }
+  main { max-width: 480px; margin: 0 auto; padding: 32px 20px 60px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 22px; margin-bottom: 20px; box-shadow: var(--shadow-sm); }
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge.active { background: var(--success-soft); color: var(--success); }
+  .badge.lapsed { background: var(--error-soft); color: var(--error); }
   .badge.none { background: var(--border); color: var(--muted); }
-  #card-element { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); margin-top: 8px; }
+  #card-element { padding: 11px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg); margin-top: 8px; transition: border-color .15s ease, box-shadow .15s ease; }
+  #card-element.StripeElement--focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   #card-errors { color: var(--error); font-size: 13px; margin-top: 8px; min-height: 1.2em; }
 </style>
 </head>
@@ -102,7 +143,13 @@ export const BILLING_UI_HTML = `<!doctype html>
 
 <div id="auth" hidden>
   <div id="card">
-    <h1>ROSE billing</h1>
+    <div class="brand">
+      <div class="mark">R</div>
+      <div>
+        <div class="wordmark">ROSE</div>
+        <div class="tagline">Billing</div>
+      </div>
+    </div>
     <p class="sub">Manage your household's subscription.</p>
 
     <form id="loginForm">
@@ -135,11 +182,17 @@ export const BILLING_UI_HTML = `<!doctype html>
 
 <div id="billing" hidden>
   <header>
-    <div>
-      <h1>ROSE billing</h1>
-      <div class="sub" id="whoami"></div>
+    <div class="brand">
+      <div class="mark">R</div>
+      <div>
+        <div class="wordmark">ROSE</div>
+        <div class="tagline">Billing</div>
+      </div>
     </div>
-    <button class="secondary" id="logoutBtn">Log out</button>
+    <div class="header-right">
+      <div class="sub" id="whoami"></div>
+      <button class="secondary" id="logoutBtn">Log out</button>
+    </div>
   </header>
 
   <main>
@@ -228,7 +281,26 @@ export const BILLING_UI_HTML = `<!doctype html>
       }
       stripe = Stripe(result.data.publishable_key);
       var elements = stripe.elements();
-      cardElement = elements.create('card');
+      // Themed to match the surrounding page (Stripe's own default is plain
+      // browser-native styling, which would otherwise be the one visibly
+      // unstyled field on the page) — read from the live CSS custom
+      // properties rather than hardcoding colors, so it follows whichever
+      // theme (light/dark) the browser resolved prefers-color-scheme to.
+      var rootStyle = getComputedStyle(document.documentElement);
+      var textColor = rootStyle.getPropertyValue('--text').trim();
+      var mutedColor = rootStyle.getPropertyValue('--muted').trim();
+      var errorColor = rootStyle.getPropertyValue('--error').trim();
+      cardElement = elements.create('card', {
+        style: {
+          base: {
+            color: textColor,
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            fontSize: '14px',
+            '::placeholder': { color: mutedColor }
+          },
+          invalid: { color: errorColor, iconColor: errorColor }
+        }
+      });
       cardElement.mount('#card-element');
       cardElement.on('change', function (event) {
         cardErrors.textContent = event.error ? event.error.message : '';
