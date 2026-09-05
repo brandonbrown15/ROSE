@@ -7,7 +7,7 @@ in this repo currently ships hardware.
 
 ## Why a device, not just software
 
-Today, [heating optimization](energy.md) requires the household to already
+Today, [Boreas Heating and Cooling Optimisation](energy.md) requires the household to already
 have Home Assistant running and reachable from the internet
 ([energy.md's Prerequisite 1](energy.md#1-home-assistant-must-be-reachable-from-the-internet))
 — by far the biggest setup barrier the product has, and one a lot of
@@ -68,7 +68,7 @@ the Cloudflare Worker — reads the heat pump over RS485/Modbus (or whatever
 interface that model needs), and applies target-temperature commands the
 Worker computes. No Home Assistant involved at all. This is what actually
 removes the Prerequisite-1 barrier above, and is the more obviously
-sellable "just the heating optimizer" product. (The alternative
+sellable "just Boreas" product. (The alternative
 considered — bridging into an existing Home Assistant instance — is not
 being built; noted here only so the reasoning isn't lost.)
 
@@ -132,13 +132,12 @@ cycle overwrites it, no alerting yet).
 ### 2. Heating-only billing
 
 A standalone device (option A above) only really makes sense alongside
-letting a household actually *buy* heating optimization without the base
-£10/month ROSE assistant subscription. Right now,
-`handlePortalStartSubscription` always includes the base ROSE price as a
-mandatory line item — heating is only ever an *addition* to it, never
-standalone (see `cloudflare/src/index.ts`, `docs/billing.md`). That
-mismatch — "some people just want the heating optimization, not the voice
-assistant" — was flagged earlier and never resolved; this hardware
+letting a household actually *buy* Boreas without the base £10/month ROSE
+assistant subscription. Right now, `handlePortalStartSubscription` always
+includes the base ROSE price as a mandatory line item — Boreas is only
+ever an *addition* to it, never standalone (see `cloudflare/src/index.ts`,
+`docs/billing.md`). That mismatch — "some people just want Boreas, not the
+voice assistant" — was flagged earlier and never resolved; this hardware
 direction is the point it starts actually mattering, since a customer who
 buys a Boreas device presumably isn't buying a voice assistant they'd need
 Home Assistant for anyway.

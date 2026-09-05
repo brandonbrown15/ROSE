@@ -35,9 +35,9 @@ Two Stripe Prices, GBP, both recurring monthly:
 | | Price | What it gets you |
 |---|---|---|
 | **ROSE Assistant** (base) | £10/month | The chat assistant, memory, Home Assistant device control, admin PIN — everything else in this repo. |
-| **Heating optimization** (add-on) | +£15/month | Heat pump scheduling against live Octopus Agile prices and the weather forecast — see [`energy.md`](energy.md). Priced to undercut Homely's £20/month equivalent. |
+| **Boreas Heating and Cooling Optimisation** (add-on) | +£15/month | Keeps the home at its chosen comfort temperature as cheaply as possible — heating or cooling, whichever's installed — against live Octopus Agile prices and the weather forecast. See [`energy.md`](energy.md). Priced to undercut Homely's £20/month equivalent. |
 
-A household always subscribes to the base price; the heating add-on is
+A household always subscribes to the base price; the Boreas add-on is
 opt-in, chosen at signup (see `POST /portal/billing/start-subscription`
 below) — both live as separate line items on one Stripe subscription, so
 there's one invoice and one card charge either way, not two. The add-on
@@ -86,7 +86,7 @@ No body. Clears the session cookie.
 
 Session-authed. `{ "email": "...", "subscription_status": "active" | "past_due" | "canceled" | ... | null, "heating_addon_active": true | false }`.
 `subscription_status: null` means this household has never started a
-subscription. `heating_addon_active` is whether the heating optimization
+subscription. `heating_addon_active` is whether the Boreas add-on's
 price is currently a line item on this household's subscription — see
 [Enforcement](#enforcement) for why that alone isn't quite the same as "is
 actually running."
@@ -155,7 +155,7 @@ integrator dashboard, or anything else changes because this feature
 exists. Enforcement only engages once a household has actually started a
 subscription and then it lapses. `/admin/pin` isn't gated at all.
 
-**The heating add-on (`/energy/run` and the scheduled cron) is gated
+**The Boreas add-on (`/energy/run` and the scheduled cron) is gated
 differently** — see `households.ts`'s `listHouseholdsReadyForEnergyOptimization`:
 a household needs BOTH `heating_addon_active` true AND `subscription_status`
 genuinely `active`/`trialing` (not just "not past_due"), unless it's the
@@ -209,5 +209,5 @@ to this repo or paste them anywhere other than directly into Cloudflare.
   household just sees `/chat` refuse to respond until the card succeeds
   (Stripe retries automatically) or the homeowner updates it via Stripe's
   own hosted flows.
-- **`/admin/pin` isn't gated** — only `/chat` and the heating add-on are,
+- **`/admin/pin` isn't gated** — only `/chat` and the Boreas add-on are,
   by design (see [Enforcement](#enforcement) above).

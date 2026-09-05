@@ -204,7 +204,7 @@ export const BILLING_UI_HTML = `<!doctype html>
         <p class="sub" style="margin-top:0;">£10/month for ROSE — a smart-home assistant for your household.</p>
         <label class="addon-row" style="display:flex; align-items:flex-start; gap:8px; font-weight:400;">
           <input type="checkbox" id="heatingAddon" style="width:auto; margin-top:3px;">
-          <span>Add heating optimization (+£15/month) — schedules your heat pump against live Octopus Agile prices and the weather forecast. Only shows up here once your installer has set up the technical side for this household.</span>
+          <span>Add Boreas Heating and Cooling Optimisation (+£15/month) — keeps your home at your chosen comfort temperature as cheaply as possible, heating or cooling depending on what's installed, using live Octopus Agile prices and the weather forecast. Only shows up here once your installer has set up the technical side for this household.</span>
         </label>
         <p class="sub" id="totalPrice" style="margin:10px 0 0; font-weight:600; color:var(--text);">Total: £10/month</p>
         <label for="card-element">Card</label>
@@ -239,7 +239,7 @@ export const BILLING_UI_HTML = `<!doctype html>
   var totalPriceEl = document.getElementById('totalPrice');
 
   heatingAddonCheckbox.addEventListener('change', function () {
-    totalPriceEl.textContent = 'Total: ' + (heatingAddonCheckbox.checked ? '£25/month (£10 + £15 heating)' : '£10/month');
+    totalPriceEl.textContent = 'Total: ' + (heatingAddonCheckbox.checked ? '£25/month (£10 + £15 Boreas)' : '£10/month');
   });
 
   var stripe = null;
@@ -318,7 +318,7 @@ export const BILLING_UI_HTML = `<!doctype html>
     var subscribed = subscriptionStatus === 'active' || subscriptionStatus === 'trialing';
     if (subscribed) {
       heatingBadge.hidden = false;
-      heatingBadge.textContent = heatingAddonActive ? 'Heating: active' : 'Heating: not added';
+      heatingBadge.textContent = heatingAddonActive ? 'Boreas: active' : 'Boreas: not added';
       heatingBadge.className = 'badge ' + (heatingAddonActive ? 'active' : 'none');
     } else {
       heatingBadge.hidden = true;

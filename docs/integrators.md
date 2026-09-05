@@ -163,7 +163,7 @@ two.
 `heatpump_entity_id`/`room_temp_entity_id` become optional in that mode —
 a provisioned device (below) stands in for both.
 
-Technical setup for [heating optimization](energy.md) — this is the
+Technical setup for [Boreas Heating and Cooling Optimisation](energy.md) — this is the
 *installer's* side of it (which entities, which tariff, which
 comfort band), entirely separate from whether the household is actually
 *paying* for the add-on, which the homeowner controls from their own

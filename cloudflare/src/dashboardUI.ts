@@ -431,7 +431,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       toggleBtn.innerHTML = ICON_HOME + '<span>Home Assistant</span>';
       var energyToggleBtn = document.createElement('button');
       energyToggleBtn.className = 'secondary';
-      energyToggleBtn.innerHTML = ICON_FLAME + '<span>Heating optimization</span>';
+      energyToggleBtn.innerHTML = ICON_FLAME + '<span>Boreas setup</span>';
       var deviceToggleBtn = document.createElement('button');
       deviceToggleBtn.className = 'secondary';
       deviceToggleBtn.innerHTML = ICON_CHIP + '<span>Boreas device</span>';
@@ -488,8 +488,8 @@ export const DASHBOARD_HTML = `<!doctype html>
       var energyForm = document.createElement('form');
       energyForm.className = 'ha-form hidden-form';
       energyForm.innerHTML =
-        '<p class="sub energy-ha-note" style="margin:0 0 4px;">Needs a Home Assistant connection above already set. This wires up the plumbing — the homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
-        '<p class="sub energy-device-note hidden-form" style="margin:0 0 4px;">Controlled by a standalone Boreas device instead of Home Assistant — provision its credential from the “Boreas device” panel above. The homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
+        '<p class="sub energy-ha-note" style="margin:0 0 4px;">Needs a Home Assistant connection above already set. This wires up Boreas Heating and Cooling Optimisation via Home Assistant — the homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
+        '<p class="sub energy-device-note hidden-form" style="margin:0 0 4px;">Boreas Heating and Cooling Optimisation via a standalone device instead of Home Assistant — provision its credential from the “Boreas device” panel above. The homeowner still has to subscribe to the add-on from their own billing portal for it to actually run.</p>' +
         '<label>Control method</label>' +
         '<select class="energy-control">' +
         '<option value="home_assistant">Home Assistant</option>' +
@@ -659,7 +659,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       // separate from this household's api_key above, for a physical unit
       // to authenticate POST /device/checkin with. Switching this
       // household's actual control method to 'boreas_device' still happens
-      // in the "Heating optimization" panel above — provisioning a device
+      // in the "Boreas setup" panel above — provisioning a device
       // here doesn't do that on its own, so pairing a device with a
       // household you haven't switched over yet is harmless.
       var deviceForm = document.createElement('form');
