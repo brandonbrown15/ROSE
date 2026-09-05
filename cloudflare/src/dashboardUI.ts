@@ -15,6 +15,9 @@ export const DASHBOARD_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ROSE Integrator Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -25,8 +28,16 @@ export const DASHBOARD_HTML = `<!doctype html>
     --border: #e2ddd6;
     --accent: #a8324a;
     --accent-text: #ffffff;
+    --accent-soft: rgba(168, 50, 74, 0.08);
     --error: #b3261e;
     --success: #2e7d32;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+    --shadow-sm: 0 1px 2px rgba(20, 16, 12, 0.05);
+    --shadow-md: 0 2px 4px rgba(20, 16, 12, 0.04), 0 12px 28px -12px rgba(20, 16, 12, 0.18);
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -35,6 +46,9 @@ export const DASHBOARD_HTML = `<!doctype html>
       --text: #f2ede6;
       --muted: #a89f92;
       --border: #3a352c;
+      --accent-soft: rgba(224, 122, 145, 0.12);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.3), 0 16px 32px -16px rgba(0, 0, 0, 0.55);
     }
   }
   * { box-sizing: border-box; }
@@ -42,39 +56,50 @@ export const DASHBOARD_HTML = `<!doctype html>
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
     min-height: 100vh;
   }
-  a { color: var(--accent); }
-  h1, h2, h3 { font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.01em; }
   p { line-height: 1.5; }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
-  input {
+  label { display: block; font-size: 12.5px; font-weight: 600; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+  input, select {
     width: 100%;
-    padding: 9px 12px;
-    border-radius: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
     font-size: 14px;
+    font-family: var(--font-body);
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
-  input:focus { outline: none; border-color: var(--accent); }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   button {
     padding: 10px 16px;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     border: none;
     background: var(--accent);
     color: var(--accent-text);
     font-weight: 600;
     cursor: pointer;
     font-size: 14px;
+    box-shadow: var(--shadow-sm);
+    transition: filter .15s ease, transform .05s ease;
   }
-  button:disabled { opacity: 0.5; cursor: default; }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: 0.5; cursor: default; filter: none; transform: none; }
   button.secondary {
-    background: none;
+    background: var(--panel);
     border: 1px solid var(--border);
     color: var(--text);
+    box-shadow: none;
   }
+  button.secondary:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); filter: none; }
   button.link {
     background: none;
     border: none;
@@ -83,83 +108,115 @@ export const DASHBOARD_HTML = `<!doctype html>
     padding: 0;
     cursor: pointer;
     font-size: 13px;
+    box-shadow: none;
   }
+  button.link:hover { text-decoration: underline; filter: none; }
   .status { font-size: 13px; margin-top: 10px; min-height: 1.2em; }
   .status.error { color: var(--error); }
   .status.ok { color: var(--success); }
   .status.muted { color: var(--muted); }
   [hidden] { display: none !important; }
+  /* Unscoped on purpose — toggled on plain divs/paragraphs (tariff/mode/
+     control-method sub-fields), not just .ha-form panels, so this has to
+     match any element carrying the class, not just one specific shape. */
+  .hidden-form { display: none !important; }
+
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0;
+    background: linear-gradient(155deg, var(--accent), #c8677c);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-display); font-weight: 700; font-size: 16px;
+    box-shadow: var(--shadow-sm);
+  }
+  .brand .wordmark { font-family: var(--font-display); font-weight: 600; font-size: 17px; letter-spacing: -0.01em; line-height: 1.2; }
+  .brand .tagline { font-size: 11.5px; color: var(--muted); margin-top: 1px; text-transform: uppercase; letter-spacing: .04em; }
 
   /* --- Auth view --- */
   #auth {
     max-width: 400px;
-    margin: 10vh auto;
-    padding: 32px;
+    margin: 8vh auto;
+    padding: 36px;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
   }
-  #auth h1 { font-size: 20px; margin: 0 0 4px; }
-  #auth .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  #auth .brand { margin-bottom: 18px; }
+  #auth .sub { color: var(--muted); font-size: 13.5px; margin: 0 0 22px; line-height: 1.55; }
   #auth form button[type="submit"] { width: 100%; margin-top: 18px; }
   #auth .switch { text-align: center; margin-top: 18px; font-size: 13px; color: var(--muted); }
 
   /* --- Dashboard view --- */
   header {
-    padding: 16px 24px;
+    padding: 18px 28px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
     background: var(--panel);
   }
-  header h1 { font-size: 17px; margin: 0; }
-  header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .header-right .sub { font-size: 12.5px; color: var(--muted); }
   main {
-    max-width: 720px;
+    max-width: 760px;
     margin: 0 auto;
-    padding: 24px 20px 60px;
+    padding: 32px 20px 60px;
   }
   .card {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
+    border-radius: var(--radius-md);
+    padding: 22px;
     margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
   }
-  .card h2 { font-size: 15px; margin: 0 0 4px; }
+  .card h2 { font-size: 16px; margin: 0 0 4px; }
   .card > .sub { color: var(--muted); font-size: 13px; margin: 0 0 4px; }
 
   #households { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
   .household {
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    transition: box-shadow .15s ease;
   }
-  .household .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .household .name { font-weight: 600; font-size: 14px; }
-  .household .id { color: var(--muted); font-size: 12px; font-family: monospace; margin-top: 2px; }
-  .household .ha-form { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
-  .household .ha-form.hidden-form { display: none; }
-  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px 0; }
+  .household .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .household .name { font-weight: 600; font-size: 14.5px; }
+  .household .id { color: var(--muted); font-size: 11.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px; }
+  .household .ha-form { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 0; }
+
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+  }
+  .tabs button svg { flex-shrink: 0; opacity: .8; }
+  .tabs button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .tabs button.active svg { opacity: 1; }
 
   .apikey-banner {
-    background: var(--bg);
+    background: var(--accent-soft);
     border: 1px solid var(--accent);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-top: 14px;
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    margin-top: 16px;
   }
-  .apikey-banner .label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .apikey-banner .label { font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
   .apikey-banner code {
     display: block;
     word-break: break-all;
     font-size: 13px;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
-    margin-bottom: 8px;
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .apikey-banner .warn { color: var(--error); font-size: 12px; font-weight: 600; }
 </style>
@@ -167,7 +224,13 @@ export const DASHBOARD_HTML = `<!doctype html>
 <body>
 
 <div id="auth">
-  <h1>ROSE for integrators</h1>
+  <div class="brand">
+    <div class="mark">R</div>
+    <div>
+      <div class="wordmark">ROSE</div>
+      <div class="tagline">For integrators</div>
+    </div>
+  </div>
   <p class="sub">Manage your client households — device connections, access, and (soon) billing — from one dashboard.</p>
 
   <form id="loginForm">
@@ -198,11 +261,17 @@ export const DASHBOARD_HTML = `<!doctype html>
 
 <div id="dashboard" hidden>
   <header>
-    <div>
-      <h1>ROSE dashboard</h1>
-      <div class="sub" id="whoami"></div>
+    <div class="brand">
+      <div class="mark">R</div>
+      <div>
+        <div class="wordmark">ROSE</div>
+        <div class="tagline">Integrator dashboard</div>
+      </div>
     </div>
-    <button class="secondary" id="logoutBtn">Log out</button>
+    <div class="header-right">
+      <div class="sub" id="whoami"></div>
+      <button class="secondary" id="logoutBtn">Log out</button>
+    </div>
   </header>
 
   <main>
@@ -245,6 +314,13 @@ export const DASHBOARD_HTML = `<!doctype html>
   var addHouseholdStatus = document.getElementById('addHouseholdStatus');
   var apiKeyBanner = document.getElementById('apiKeyBanner');
   var whoamiEl = document.getElementById('whoami');
+
+  // Small inline icons for the per-household panel tabs — stroke-based so
+  // they inherit the button's own text color (and its .active accent color)
+  // automatically, in both themes, with no separate icon asset/library.
+  var ICON_HOME = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7.5 8 2l6 5.5"/><path d="M3.5 6.5V13.5a.5.5 0 0 0 .5.5h3v-4h2v4h3a.5.5 0 0 0 .5-.5V6.5"/></svg>';
+  var ICON_FLAME = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5c1 2 3 3 3 6a3 3 0 1 1-6 0c0-1 .5-1.8 1-2.5.2 1 .8 1.5 1.3 1.2C7.8 5.5 7 4 8 1.5Z"/></svg>';
+  var ICON_CHIP = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1"/><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"/></svg>';
 
   function api(path, opts) {
     opts = opts || {};
@@ -352,17 +428,20 @@ export const DASHBOARD_HTML = `<!doctype html>
       info.querySelector('.id').textContent = h.id;
       var toggleBtn = document.createElement('button');
       toggleBtn.className = 'secondary';
-      toggleBtn.textContent = 'Home Assistant';
+      toggleBtn.innerHTML = ICON_HOME + '<span>Home Assistant</span>';
       var energyToggleBtn = document.createElement('button');
       energyToggleBtn.className = 'secondary';
-      energyToggleBtn.textContent = 'Heating optimization';
+      energyToggleBtn.innerHTML = ICON_FLAME + '<span>Heating optimization</span>';
       var deviceToggleBtn = document.createElement('button');
       deviceToggleBtn.className = 'secondary';
-      deviceToggleBtn.textContent = 'Boreas device';
+      deviceToggleBtn.innerHTML = ICON_CHIP + '<span>Boreas device</span>';
+      var tabs = document.createElement('div');
+      tabs.className = 'tabs';
+      tabs.appendChild(toggleBtn);
+      tabs.appendChild(energyToggleBtn);
+      tabs.appendChild(deviceToggleBtn);
       row.appendChild(info);
-      row.appendChild(toggleBtn);
-      row.appendChild(energyToggleBtn);
-      row.appendChild(deviceToggleBtn);
+      row.appendChild(tabs);
       wrap.appendChild(row);
 
       var haForm = document.createElement('form');
@@ -378,6 +457,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 
       toggleBtn.addEventListener('click', function () {
         haForm.classList.toggle('hidden-form');
+        toggleBtn.classList.toggle('active', !haForm.classList.contains('hidden-form'));
       });
 
       haForm.addEventListener('submit', function (e) {
@@ -422,7 +502,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         '<option value="auto">Auto — switch by outdoor temperature</option>' +
         '</select>' +
         '<div class="energy-auto-fields hidden-form">' +
-        '<p class="sub" style="margin:4px 0 0;">Switches itself between heating and cooling as the weather changes — most UK homes only need cooling a handful of days a year, so nobody has to remember to flip it. Starts heating; moves to cooling once the outdoor temperature is above the top threshold, and back once it\'s below the bottom one, so a borderline day doesn\'t flip it back and forth.</p>' +
+        '<p class="sub" style="margin:4px 0 0;">Switches itself between heating and cooling as the weather changes — most UK homes only need cooling a handful of days a year, so nobody has to remember to flip it. Starts heating; moves to cooling once the outdoor temperature is above the top threshold, and back once it\\'s below the bottom one, so a borderline day doesn\\'t flip it back and forth.</p>' +
         '<label>Switch to heating below (°C)</label>' +
         '<input type="number" class="energy-auto-heat-below" placeholder="18">' +
         '<label>Switch to cooling above (°C)</label>' +
@@ -463,6 +543,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 
       energyToggleBtn.addEventListener('click', function () {
         energyForm.classList.toggle('hidden-form');
+        energyToggleBtn.classList.toggle('active', !energyForm.classList.contains('hidden-form'));
       });
 
       var tariffTypeSelect = energyForm.querySelector('.energy-tariff-type');
@@ -592,12 +673,13 @@ export const DASHBOARD_HTML = `<!doctype html>
         '<div class="apikey-banner device-key-banner" hidden>' +
         '<div class="label">Device key — save this now:</div>' +
         '<code class="device-key-value"></code>' +
-        '<div class="warn">This won\'t be shown again. Flash or configure it into the physical Boreas unit.</div>' +
+        '<div class="warn">This won\\'t be shown again. Flash or configure it into the physical Boreas unit.</div>' +
         '</div>';
       wrap.appendChild(deviceForm);
 
       deviceToggleBtn.addEventListener('click', function () {
         deviceForm.classList.toggle('hidden-form');
+        deviceToggleBtn.classList.toggle('active', !deviceForm.classList.contains('hidden-form'));
       });
 
       deviceForm.addEventListener('submit', function (e) {
