@@ -1,7 +1,7 @@
-# Boreas device (planned) — a DIN-rail heat pump/AC gateway
+# Boreas device (planned) — a standalone heat pump/AC gateway
 
 **Not built yet.** This document captures the product direction as of
-2026-09-04 so the architecture decisions below are recorded before any
+2026-09-05 so the architecture decisions below are recorded before any
 firmware exists, not because there's a device to configure today. Nothing
 in this repo currently ships hardware.
 
@@ -14,14 +14,20 @@ have Home Assistant running and reachable from the internet
 heating-only customers won't clear: someone who wants cheaper heat pump
 running costs has no reason to also run a full smart-home hub.
 
-A dedicated, DIN-rail-mounted Boreas device removes that requirement
-entirely. It's a small gateway that sits in the consumer unit/comms
-cabinet next to the heat pump, wired directly to it, and talks to the
-Cloudflare Worker on its own — no Home Assistant, no tunnel, no existing
-smart-home setup. Same idea as Homely's own hardware, and the natural next
-step for the standalone-heating-only customer this product doesn't
-currently serve well (see [Open question 2](#2-heating-only-billing)
+A dedicated Boreas device removes that requirement entirely. It's a small
+gateway that sits near the heat pump, wired directly to it, and talks to
+the Cloudflare Worker on its own — no Home Assistant, no tunnel, no
+existing smart-home setup. Same idea as Homely's own hardware, and the
+natural next step for the standalone-heating-only customer this product
+doesn't currently serve well (see [Open question 2](#2-heating-only-billing)
 below).
+
+**Not DIN-rail mounted.** DIN-rail was the original assumption, but it
+pulled hardware selection toward industrial-grade, certified PLC boards
+priced for trade/commercial buyers (~$150-200/unit — see
+[Open question 3](#3-hardwarebom--build-vs-buy)), which doesn't work for a
+consumer product. A simple wall-mounted or free-standing enclosure instead
+opens up ordinary maker-grade hardware at a tenth of that cost.
 
 ## Connectivity
 
@@ -45,14 +51,13 @@ interchangeable rather than one fixed interface:
   interface each supported model actually needs as real installs happen,
   rather than guessing a full list now.
 
-**Network side** — RJ45 Ethernet as the reliable default (a DIN-rail
-enclosure sits in an electrical cabinet, where a wired drop is often
-already there or easy to add), plus **Wi-Fi** so an install doesn't stall
-on running a network cable to a cabinet that doesn't have one nearby —
-that's a real install-friction reducer, not just a nice-to-have, given how
-often the comms cabinet and the heat pump's electrical connection aren't
-in the same place. Same reasoning as offering both options rather than
-picking one.
+**Network side** — **Wi-Fi**, primarily: this is a consumer unit, not
+industrial kit sitting in a comms cabinet next to an existing wired drop,
+and requiring an Ethernet run is exactly the kind of install friction that
+made avoiding a Home Assistant/tunnel prerequisite worth doing in the
+first place. Wired Ethernet stays a possible option for a later variant if
+some installs need it, but isn't the v1 default the way it would be for a
+DIN-rail industrial gateway.
 
 ## Open questions
 
@@ -140,47 +145,49 @@ Home Assistant for anyway.
 
 ### 3. Hardware/BOM — build vs. buy
 
-**Decision: don't design a custom PCB for v1.** Researched what's already
-on the market (2026-09-04) rather than assume a custom board was needed,
-and there are two real tiers of existing hardware:
+**Decision: don't design a custom PCB for v1, and don't use an industrial
+DIN-rail PLC either — plain maker-grade modules instead.** Researched what's
+on the market in two passes:
 
-- **Pure protocol gateways** — "dumb" bridges with no custom logic, just
-  Modbus RTU↔TCP/MQTT forwarding: Waveshare's
-  [RS485 to WiFi/ETH module](https://www.waveshare.com/rs485-to-wifi-eth.htm),
-  PUSR's [USR-DR404](https://shop.usriot.com/rs485-to-802.11-a/b/g/n-wlan-serial-device-server-usr-dr404.html),
-  Valtoris's [VT-WF110](https://valtoris.com/product/rs485-wifi-ethernet-converter-din-rail/).
-  These don't run our code — the Worker would need to speak Modbus
-  directly and parse the Samsung register map itself, which doesn't give
-  Open question 1's standalone architecture, just relocates where the
-  Modbus parsing happens.
-- **Programmable, CE-certified ESP32 PLCs** — this is the one that
-  actually fits: an ESP32(-S3), Ethernet, Wi-Fi, RS485 (MAX485-based),
-  DIN-rail enclosure, already CE-marked, and open to writing our own
-  firmware (Arduino/ESP-IDF). Two real options:
-  [Erqos EQSP32CE](https://erqos.com/product/eqsp32ce/) (new as of mid-2026 —
-  ESP32-S3, Ethernet + Wi-Fi + BLE + RS485/RS232 + CAN bus, ~$185/€155
-  single-unit with OEM volume pricing) and
-  [Industrial Shields' ESP32 PLC](https://www.industrialshields.com/industrial-hardware-solutions-based-on-esp32)
-  line (longer track record, open-source hardware, same shape).
+**First pass (2026-09-04, DIN-rail assumed)** landed on CE-certified ESP32
+PLCs — [Erqos EQSP32CE](https://erqos.com/product/eqsp32ce/) or
+[Industrial Shields' ESP32 PLC](https://www.industrialshields.com/industrial-hardware-solutions-based-on-esp32)
+line, ~$150-200/unit. Once DIN-rail was dropped (2026-09-05 — see
+[Connectivity](#connectivity) above), that price point stopped making
+sense for a consumer product, so:
 
-**Why buy rather than design a custom board right now:**
+**Revised: a plain ESP32 dev board + a small RS485 add-on, in an ordinary
+plastic enclosure — roughly $10-20/unit in components:**
 
-- **Certification, not the PCB itself, is the real cost of custom
-  hardware.** This device lives in a customer's electrical consumer
-  unit — that almost certainly needs CE/UKCA marking, possibly EMC/safety
-  testing with a notified body. These boards already carry that
-  certification; using one as-is inherits it instead of paying for it
-  from scratch before a single unit's sold.
-- **It lets the real open question (1 above) get validated in firmware
-  first** — standalone-vs-Home-Assistant-bridge is a protocol/software
-  risk, not a hardware one, and can be piloted entirely on an off-the-
-  shelf board.
-- **Custom PCB only pays off at volume**, once the design is proven and
-  the goal shifts to beating ~$185/unit at scale — premature before
-  Boreas-the-device has sold anything.
+- **ESP32 dev board** — a basic WROOM devkit (~$3-8) for Wi-Fi-only, or the
+  [WT32-ETH01](https://www.espboards.dev/esp32/wt32-eth01/) (ESP32 +
+  built-in Ethernet PHY + Wi-Fi + Bluetooth, **$9-18 retail, ~$2-3 at
+  AliExpress/volume** — [JacobsParts](https://www.jacobsparts.com/items/DEVBOARD-G))
+  if a wired-Ethernet variant is ever wanted.
+- **RS485 transceiver** — a MAX485 TTL-to-RS485 breakout module, ~$1-3.
+- **Enclosure** — an off-the-shelf plastic project box (~$2-5), not a
+  certified DIN-rail housing.
 
-Sources: [CNX Software on the EQSP32CE](https://www.cnx-software.com/2026/06/05/erqos-eqsp32ce-an-industrial-iot-esp32-s3-plc-with-ethernet-rs232-rs485-can-bus-din-rail-support/),
-[Industrial Shields' ESP32 PLC technical features](https://www.industrialshields.com/technical-features-industrial-esp32-plc).
+**v1 recommendation: Wi-Fi-only** (plain devkit + MAX485, skip Ethernet
+entirely) — Wi-Fi was already the priority for install ease, and Ethernet
+was only pulling its weight when this was also an industrial, wired-by-
+default device. A wired variant (WT32-ETH01) stays available later if
+real installs need it.
+
+**Certification correction — doesn't carry over from the first pass.** The
+CE-certified-PLC option's certification argument was specific to that
+option: the board itself was already CE-marked, so using it as-is inherited
+that. A bare ESP32 dev board's radio (Wi-Fi/Bluetooth) is separately
+pre-certified — Espressif's modules carry their own FCC/CE RED
+certification — but **the finished, assembled Boreas unit still needs its
+own CE/UKCA marking** as a product wired into a heat pump's electrics,
+regardless of which board sits inside it. That compliance/testing cost
+doesn't disappear by choosing cheaper hardware — it needs budgeting for
+before real units ship, same as it always would have for a custom PCB,
+just smaller in scope than designing the electronics from scratch too.
+
+Sources: [espboards.dev's WT32-ETH01 spec page](https://www.espboards.dev/esp32/wt32-eth01/),
+[JacobsParts WT32-ETH01 listing](https://www.jacobsparts.com/items/DEVBOARD-G).
 
 ### 4. Device provisioning
 
